@@ -1,8 +1,9 @@
-import { Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { AiService } from "./services/ai-service";
 import { ClippingPipeline } from "./services/clipping-pipeline";
 import { MermaidService } from "./services/mermaid-service";
 import { PathRouter } from "./services/path-router";
+import { PluginDataManager } from "./services/plugin-data-manager";
 import { KnowledgeStore } from "./services/store";
 import { DEFAULT_SETTINGS, KnowFlowSettingTab } from "./settings";
 import { KNOWFLOW_VIEW_TYPE, type AiModelConfig, type KnowFlowSettings } from "./types";
@@ -15,19 +16,19 @@ export default class KnowFlowPlugin extends Plugin {
   ai: AiService;
   mermaid: MermaidService;
   pipeline: ClippingPipeline;
+  private dataManager: PluginDataManager;
 
   async onload(): Promise<void> {
+    this.dataManager = new PluginDataManager(this);
     await this.loadSettings();
 
     this.store = new KnowledgeStore({
       loadData: async () => {
-        const data = await this.loadData();
-        return data && typeof data === "object" && "store" in data ? (data as { store?: unknown }).store : undefined;
+        const root = await this.dataManager.read();
+        return root.store;
       },
       saveData: async (storeData: unknown) => {
-        const data = await this.loadData();
-        const root = data && typeof data === "object" ? data as Record<string, unknown> : {};
-        await this.saveData({ ...root, settings: this.settings, store: storeData });
+        await this.dataManager.update((root) => ({ ...root, store: storeData }));
       }
     });
     await this.store.load();
@@ -92,6 +93,14 @@ export default class KnowFlowPlugin extends Plugin {
         void this.store.migratePath(oldPath, file.path).then(() => this.refreshView());
         return;
       }
+      if (file instanceof TFolder) {
+        // Obsidian fires a single rename event for the folder itself; it does
+        // not emit separate events for each descendant file, so any stored
+        // summaries/quizzes/learning state keyed by those old file paths must
+        // be migrated here or they become permanently orphaned.
+        void this.store.migrateFolder(oldPath, file.path).then(() => this.refreshView());
+        return;
+      }
       this.refreshView();
     }));
 
@@ -103,17 +112,13 @@ export default class KnowFlowPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const data = await this.loadData();
-    const savedSettings = data && typeof data === "object" && "settings" in data
-      ? (data as { settings?: Partial<KnowFlowSettings> }).settings
-      : data;
+    const root = await this.dataManager.read();
+    const savedSettings = "settings" in root ? (root as { settings?: Partial<KnowFlowSettings> }).settings : root;
     this.settings = normalizeSettings(savedSettings);
   }
 
   async saveSettings(): Promise<void> {
-    const data = await this.loadData();
-    const root = data && typeof data === "object" ? data as Record<string, unknown> : {};
-    await this.saveData({ ...root, settings: this.settings });
+    await this.dataManager.update((root) => ({ ...root, settings: this.settings }));
     this.router?.updateSettings(this.settings);
     this.ai?.updateSettings(this.settings);
     this.pipeline?.updateSettings(this.settings);

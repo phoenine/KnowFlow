@@ -4,6 +4,9 @@ import { row, setStyles } from "./dom";
 interface ChatComposerProps {
   contextLabel: string;
   modelName: string;
+  draft: string;
+  focusDraft: boolean;
+  onDraftChange: (value: string) => void;
   onSubmit: (question: string) => void;
 }
 
@@ -103,6 +106,8 @@ export function renderChatComposer(root: HTMLElement, props: ChatComposerProps):
     resize: "none",
     width: "100%"
   });
+  input.value = props.draft;
+  input.addEventListener("input", () => props.onDraftChange(input.value));
   input.addEventListener("focus", () => {
     setStyles(panel, {
       borderColor: "var(--interactive-accent)",
@@ -115,6 +120,15 @@ export function renderChatComposer(root: HTMLElement, props: ChatComposerProps):
       boxShadow: "none"
     });
   });
+  if (props.focusDraft) {
+    // Restores focus/cursor after a background re-render (e.g. pipeline
+    // progress ticks) tore down and recreated this textarea, so the user
+    // doesn't lose their place mid-sentence.
+    window.requestAnimationFrame(() => {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
   const footer = row(panel, "kf-composer-footer");
   setStyles(footer, {
     alignItems: "center",

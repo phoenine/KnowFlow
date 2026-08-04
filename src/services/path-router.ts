@@ -48,6 +48,12 @@ export class PathRouter {
   }
 
   private getSelectedPath(): string | null {
+    // `fileItems`/`selfEl` are undocumented internals of Obsidian's built-in
+    // file-explorer view, not part of the public Obsidian API. They can
+    // change or disappear across Obsidian versions, or simply be unavailable
+    // if the core file-explorer plugin is disabled. All lookups below are
+    // defensive (optional chaining, null fallback) so a breakage here just
+    // degrades to "no explorer selection detected" instead of throwing.
     const fileExplorer = this.app.workspace.getLeavesOfType("file-explorer")[0];
     const view = fileExplorer?.view as unknown as { fileItems?: Record<string, { selfEl?: HTMLElement }> };
     const fileItems = view?.fileItems;

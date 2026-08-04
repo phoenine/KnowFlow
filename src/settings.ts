@@ -1,5 +1,6 @@
-import { App, Modal, Notice, PluginSettingTab, Setting, normalizePath, requestUrl } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting, TextComponent, normalizePath, requestUrl } from "obsidian";
 import type KnowFlowPlugin from "./main";
+import { withTimeout } from "./services/ai-service";
 import type { AiModelConfig, AiRuntime, KnowFlowSettings } from "./types";
 
 type ModelConfigKey = "summaryModel" | "chatModel" | "quizModel";
@@ -135,7 +136,7 @@ export class KnowFlowSettingTab extends PluginSettingTab {
 
     new Setting(vault)
       .setName("Auto-create category folders")
-      .setDesc("Off by default to avoid creating noisy folder structures.")
+      .setDesc("Built-in categories are always auto-created. Off by default; enable to also auto-create folders for custom (non-built-in) categories.")
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.autoCreateCategoryFolders)
@@ -259,6 +260,11 @@ export class KnowFlowSettingTab extends PluginSettingTab {
       text: "KnowFlow stores settings and learning state in local Obsidian plugin data. API requests should only send the current note or selected context.",
       cls: "setting-item-description"
     });
+    const apiKeyWarning = privacy.createEl("p", {
+      text: "Warning: AI model API keys are stored in plain text inside this vault's plugin data file (.obsidian/plugins/knowflow/data.json). If this vault is synced via Git or a cloud service, exclude that file or your keys may be exposed.",
+      cls: "setting-item-description"
+    });
+    Object.assign(apiKeyWarning.style, { color: "var(--text-warning)" });
 
     new Setting(privacy)
       .setName("Export data")
@@ -432,12 +438,16 @@ async function testModelConnection(config: AiModelConfig): Promise<void> {
     headers.Authorization = `Bearer ${config.apiKey.trim()}`;
   }
 
-  const response = await requestUrl({
-    url: `${baseUrl}/models`,
-    method: "GET",
-    headers,
-    throw: false
-  });
+  const response = await withTimeout(
+    requestUrl({
+      url: `${baseUrl}/models`,
+      method: "GET",
+      headers,
+      throw: false
+    }),
+    15000,
+    `Connection test timed out after 15s. Check that ${baseUrl} is reachable.`
+  );
 
   if (response.status < 200 || response.status >= 300) {
     const message = response.text?.slice(0, 160) || `HTTP ${response.status}`;
@@ -477,6 +487,8 @@ class ModelConfigModal extends Modal {
       cls: "setting-item-description"
     });
 
+    let baseUrlInput: TextComponent | undefined;
+
     new Setting(contentEl)
       .setName("AI Runtime")
       .setDesc("Cloud uses OpenAI-compatible API. Local supports Ollama and LM Studio.")
@@ -492,6 +504,10 @@ class ModelConfigModal extends Modal {
             config.runtime = value as AiRuntime;
             if (!previousBaseUrl || Object.values(RUNTIME_DEFAULT_BASE_URL).includes(previousBaseUrl)) {
               config.apiBaseUrl = RUNTIME_DEFAULT_BASE_URL[config.runtime];
+              // The base URL field below was already rendered with the old
+              // value; without this it would keep showing a stale URL even
+              // though the new default was already saved.
+              baseUrlInput?.setValue(config.apiBaseUrl);
             }
             await this.plugin.saveSettings();
           })
@@ -500,15 +516,16 @@ class ModelConfigModal extends Modal {
     new Setting(contentEl)
       .setName("API Base URL")
       .setDesc("Cloud: OpenAI-compatible endpoint. Ollama and LM Studio use local v1-compatible endpoints.")
-      .addText((text) =>
+      .addText((text) => {
+        baseUrlInput = text;
         text
           .setPlaceholder(RUNTIME_DEFAULT_BASE_URL[config.runtime])
           .setValue(config.apiBaseUrl)
           .onChange(async (value) => {
             config.apiBaseUrl = value.trim();
             await this.plugin.saveSettings();
-          })
-      );
+          });
+      });
 
     new Setting(contentEl)
       .setName("API Key")

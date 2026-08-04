@@ -22,6 +22,8 @@ interface QuizResponse {
   }>;
 }
 
+const REQUEST_TIMEOUT_MS = 60000;
+
 export class AiService {
   constructor(private settings: KnowFlowSettings) {}
 
@@ -206,13 +208,17 @@ export class AiService {
       body.response_format = { type: "json_object" };
     }
 
-    const response = await requestUrl({
-      url: `${baseUrl}/chat/completions`,
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      throw: false
-    });
+    const response = await withTimeout(
+      requestUrl({
+        url: `${baseUrl}/chat/completions`,
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        throw: false
+      }),
+      REQUEST_TIMEOUT_MS,
+      `AI request timed out after ${REQUEST_TIMEOUT_MS / 1000}s. Check that ${baseUrl} is reachable.`
+    );
 
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`AI request failed: ${response.text?.slice(0, 220) || `HTTP ${response.status}`}`);
@@ -309,6 +315,30 @@ function parseJsonResponse<T>(text: string): T {
     }
     throw new Error("AI response was not valid JSON.");
   }
+}
+
+/**
+ * Obsidian's `requestUrl` has no AbortSignal/timeout option, so a hung AI
+ * endpoint would otherwise leave the UI (e.g. "generating summary...",
+ * disabled buttons) stuck indefinitely with no way to recover short of
+ * reloading the plugin. This races the request against a timer so callers
+ * always get a rejection to react to; it does not cancel the underlying
+ * network request, it just stops waiting on it.
+ */
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 function stripFrontmatter(content: string): string {

@@ -57,7 +57,48 @@ export class KnowledgeStore {
   }
 
   async migratePath(oldPath: string, newPath: string): Promise<void> {
-    if (!oldPath || !newPath || oldPath === newPath) return;
+    if (this.migratePathInMemory(oldPath, newPath)) {
+      await this.save();
+    }
+  }
+
+  /**
+   * Migrates every stored record (summaries, quizzes, attempts, learned
+   * state, pipeline history) whose path lives under `oldFolder` to the same
+   * relative path under `newFolder`. Needed because Obsidian only emits one
+   * "rename" event for a renamed folder itself, not one per descendant file.
+   */
+  async migrateFolder(oldFolder: string, newFolder: string): Promise<void> {
+    if (!oldFolder || !newFolder || oldFolder === newFolder) return;
+    const oldPrefix = `${oldFolder}/`;
+    const affectedPaths = new Set<string>();
+    const collect = (path: string): void => {
+      if (path.startsWith(oldPrefix)) affectedPaths.add(path);
+    };
+
+    Object.keys(this.data.summaries).forEach(collect);
+    Object.keys(this.data.pipelineStatuses).forEach(collect);
+    Object.keys(this.data.quizzes).forEach(collect);
+    this.data.quizAttempts.forEach((attempt) => collect(attempt.notePath));
+    this.data.learnedPaths.forEach(collect);
+    this.data.pipelineResults.forEach((result) => {
+      collect(result.sourcePath);
+      collect(result.targetPath);
+    });
+
+    let changed = false;
+    for (const oldPath of affectedPaths) {
+      const newPath = `${newFolder}/${oldPath.slice(oldPrefix.length)}`;
+      changed = this.migratePathInMemory(oldPath, newPath) || changed;
+    }
+
+    if (changed) {
+      await this.save();
+    }
+  }
+
+  private migratePathInMemory(oldPath: string, newPath: string): boolean {
+    if (!oldPath || !newPath || oldPath === newPath) return false;
     let changed = false;
 
     const summary = this.data.summaries[oldPath];
@@ -106,9 +147,7 @@ export class KnowledgeStore {
       return next;
     });
 
-    if (changed) {
-      await this.save();
-    }
+    return changed;
   }
 
   getQuizStats(path: string): QuizStats {

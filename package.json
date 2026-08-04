@@ -7,7 +7,7 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
     "install:dev": "npm run build && node scripts/install-dev.mjs",
-    "test": "npm run build && node scripts/test-cleanup.mjs",
+    "test": "npm run build && node scripts/test-cleanup.mjs && node scripts/test-store.mjs",
     "typecheck": "tsc -noEmit -skipLibCheck"
   },
   "keywords": [

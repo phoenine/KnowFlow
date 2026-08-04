@@ -19,6 +19,8 @@ export class KnowFlowSidebarView extends ItemView {
   private selectedCategories = new Map<string, string>();
   private manuallySelectedCategories = new Set<string>();
   private renderedContextKey: string | null = null;
+  private composerDraft = "";
+  private pendingComposerFocus = false;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -48,6 +50,10 @@ export class KnowFlowSidebarView extends ItemView {
     const nextContextKey = this.getRenderContextKey();
     const currentScroll = root.querySelector<HTMLElement>(".kf-content")?.scrollTop ?? 0;
     const shouldRestoreScroll = this.renderedContextKey === nextContextKey;
+    this.pendingComposerFocus = shouldRestoreScroll && root.querySelector(".kf-input") === document.activeElement;
+    if (!shouldRestoreScroll) {
+      this.composerDraft = "";
+    }
     root.empty();
     root.addClass("knowflow-view");
     setStyles(root, {
@@ -334,6 +340,11 @@ export class KnowFlowSidebarView extends ItemView {
     renderChatComposer(root, {
       contextLabel: label,
       modelName: this.plugin.settings.chatModel.model,
+      draft: this.composerDraft,
+      focusDraft: this.pendingComposerFocus,
+      onDraftChange: (value) => {
+        this.composerDraft = value;
+      },
       onSubmit: (question) => void this.submitChat(question, context, file)
     });
   }
@@ -350,6 +361,7 @@ export class KnowFlowSidebarView extends ItemView {
       new Notice(`KnowFlow chat failed: ${error instanceof Error ? error.message : String(error)}`, 8000);
       return;
     }
+    this.composerDraft = "";
     this.render();
   }
 
