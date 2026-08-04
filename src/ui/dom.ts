@@ -20,6 +20,44 @@ export function row(parent: HTMLElement, className = ""): HTMLElement {
   });
 }
 
+export function iconSpan(parent: HTMLElement, icon: string): HTMLSpanElement {
+  const span = parent.createSpan();
+  setIcon(span, icon);
+  return setStyles(span, {
+    color: "var(--interactive-accent)",
+    display: "inline-flex",
+    flex: "0 0 auto"
+  });
+}
+
+/**
+ * The "icon + card title (+ optional trailing pill/button/status)" header
+ * pattern repeated across every card in clipping-view.ts, article-detail-view.ts,
+ * articles-overview-view.ts and sidebar-view.ts. Pass `trailing` to render a
+ * pill, button or status element on the right side of the header row.
+ */
+export function cardHeader(
+  parent: HTMLElement,
+  icon: string,
+  title: string,
+  trailing?: (header: HTMLElement) => void
+): HTMLElement {
+  const header = row(parent);
+  if (trailing) {
+    setStyles(header, { justifyContent: "space-between" });
+    const titleRow = row(header);
+    setStyles(titleRow, { gap: "8px", minWidth: "0" });
+    iconSpan(titleRow, icon);
+    text(titleRow, title, "kf-card-title");
+    trailing(header);
+  } else {
+    setStyles(header, { gap: "8px" });
+    iconSpan(header, icon);
+    text(header, title, "kf-card-title");
+  }
+  return header;
+}
+
 export function text(parent: HTMLElement, content: string, className = ""): HTMLElement {
   const el = parent.createDiv({ text: content, cls: className });
   if (className.includes("kf-brand-title")) {

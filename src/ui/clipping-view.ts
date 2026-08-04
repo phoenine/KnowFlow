@@ -1,7 +1,7 @@
 import { setIcon } from "obsidian";
 import { ARTICLE_CATEGORIES } from "../services/clipping-pipeline";
 import type { NoteSummary, PipelineStatus, PipelineUiState } from "../types";
-import { applyActionLayout, applyMetricsLayout, attachPressFeedback, button, formatDate, metric, row, section, setStyles, text } from "./dom";
+import { applyActionLayout, applyMetricsLayout, attachPressFeedback, button, cardHeader, formatDate, iconSpan, metric, row, section, setStyles, text } from "./dom";
 import { renderBrandShell } from "./shell";
 
 const CLIPPING_PIPELINE_STEPS = [
@@ -39,14 +39,7 @@ export function renderClippingView(root: HTMLElement, props: ClippingViewProps):
 
   const current = section(content, "kf-current");
   const titleRow = row(current);
-  setStyles(titleRow, { gap: "10px" });
-  const docIcon = titleRow.createSpan();
-  setIcon(docIcon, "file-text");
-  setStyles(docIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
-  });
+  iconSpan(titleRow, "file-text");
   text(titleRow, props.title, "kf-card-title");
   const metrics = row(current, "kf-metrics");
   applyMetricsLayout(metrics);
@@ -61,17 +54,13 @@ export function renderClippingView(root: HTMLElement, props: ClippingViewProps):
 
 function renderSummaryCard(content: HTMLElement, props: ClippingViewProps): void {
   const summary = section(content, "kf-summary");
-  const summaryTitle = row(summary);
-  setStyles(summaryTitle, { justifyContent: "space-between" });
-  const summaryLeft = row(summaryTitle);
-  const sparkle = summaryLeft.createSpan();
-  setIcon(sparkle, "sparkles");
-  setStyles(sparkle, { color: "var(--interactive-accent)", display: "inline-flex" });
-  text(summaryLeft, "AI Summary", "kf-card-title");
-  const refreshButton = unborderedIconButton(summaryTitle, "Refresh summary", "refresh-cw", () => {
-    if (!props.summaryPending) {
-      void lockButton(refreshButton, props.onRefreshSummary);
-    }
+  let refreshButton!: HTMLButtonElement;
+  cardHeader(summary, "sparkles", "AI Summary", (header) => {
+    refreshButton = unborderedIconButton(header, "Refresh summary", "refresh-cw", () => {
+      if (!props.summaryPending) {
+        void lockButton(refreshButton, props.onRefreshSummary);
+      }
+    });
   });
   if (!props.summary && !props.summaryError && !props.summaryPending) {
     refreshButton.style.display = "none";
@@ -88,7 +77,6 @@ function renderSummaryCard(content: HTMLElement, props: ClippingViewProps): void
     );
   }
   if (props.summary) {
-    text(summary, `预计消耗：约 ${props.analysisCost}k tokens`, "kf-token-estimate");
     props.renderMarkdownSummary(summary, `${props.summary.summary}${props.summary.reason ? `\n\n> ${props.summary.reason}` : ""}`);
   } else {
     text(
@@ -117,23 +105,11 @@ function renderPipelineCard(content: HTMLElement, props: ClippingViewProps): voi
     backgroundColor: "color-mix(in srgb, orange 7%, var(--background-primary))",
     borderColor: "color-mix(in srgb, orange 35%, var(--background-modifier-border))"
   });
-  const pipelineHeader = row(pipeline);
-  setStyles(pipelineHeader, {
-    alignItems: "flex-start",
-    justifyContent: "space-between"
+  const pipelineHeader = cardHeader(pipeline, "list-checks", "Clipping Pipeline", (header) => {
+    const raw = header.createDiv({ text: props.statusText });
+    applyStatusPill(raw);
   });
-  const pipelineTitle = row(pipelineHeader);
-  setStyles(pipelineTitle, { gap: "8px", minWidth: "0" });
-  const pipelineIcon = pipelineTitle.createSpan();
-  setIcon(pipelineIcon, "list-checks");
-  setStyles(pipelineIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
-  });
-  text(pipelineTitle, "Clipping Pipeline", "kf-card-title");
-  const raw = pipelineHeader.createDiv({ text: props.statusText });
-  applyStatusPill(raw);
+  setStyles(pipelineHeader, { alignItems: "flex-start" });
 
   if (props.pipelineState?.visible) {
     renderPipelineProgress(pipeline, props.pipelineState);
@@ -164,19 +140,9 @@ function renderPipelineCard(content: HTMLElement, props: ClippingViewProps): voi
 
 function renderMoveCard(content: HTMLElement, props: ClippingViewProps): void {
   const move = section(content, "kf-move");
-  const moveTitle = row(move);
-  setStyles(moveTitle, { justifyContent: "space-between" });
-  const moveTitleLeft = row(moveTitle);
-  setStyles(moveTitleLeft, { gap: "8px", minWidth: "0" });
-  const moveIcon = moveTitleLeft.createSpan();
-  setIcon(moveIcon, "folder-input");
-  setStyles(moveIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
+  cardHeader(move, "folder-input", "分类与移动", (header) => {
+    text(header, "用户确认", "kf-pill");
   });
-  text(moveTitleLeft, "分类与移动", "kf-card-title");
-  text(moveTitle, "用户确认", "kf-pill");
   const categoryControl = row(move);
   setStyles(categoryControl, {
     justifyContent: "space-between",

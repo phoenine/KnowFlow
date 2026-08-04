@@ -1,5 +1,6 @@
 import { Notice, TFile } from "obsidian";
 import type { App } from "obsidian";
+import { findSummaryCalloutEndIndex } from "./summary-notes";
 
 export class MermaidService {
   constructor(private app: App) {}
@@ -35,14 +36,25 @@ export class MermaidService {
 
 function upsertKnowledgeMap(content: string, mermaid: string): string {
   const block = `## Knowledge Map\n\n\`\`\`mermaid\n${mermaid}\n\`\`\``;
-  const normalized = content.trimEnd();
+  const normalized = content.replace(/\r\n/g, "\n");
   const sectionPattern = /^## Knowledge Map\n[\s\S]*?(?=^##\s|(?![\s\S]))/m;
 
   if (sectionPattern.test(normalized)) {
-    return `${normalized.replace(sectionPattern, block)}\n`;
+    return `${normalized.trimEnd().replace(sectionPattern, block)}\n`;
   }
 
-  return `${normalized}\n\n${block}\n`;
+  // Insert right after the AI summary callout (if there is one) rather
+  // than just appending to the end of the file, so the map always reads
+  // as "AI summary, then knowledge map" regardless of what other content
+  // the note has below the summary.
+  const summaryEnd = findSummaryCalloutEndIndex(normalized);
+  if (summaryEnd !== null) {
+    const before = normalized.slice(0, summaryEnd).replace(/\n+$/, "");
+    const after = normalized.slice(summaryEnd).replace(/^\n+/, "");
+    return after ? `${before}\n\n${block}\n\n${after}\n` : `${before}\n\n${block}\n`;
+  }
+
+  return `${normalized.trimEnd()}\n\n${block}\n`;
 }
 
 function extractHeadings(content: string): Array<{ level: number; text: string }> {

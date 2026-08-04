@@ -1,9 +1,13 @@
 export interface FrontmatterUpdateData {
   title: string;
+  today: string;
+}
+
+export interface SummaryFrontmatterData {
   description: string;
   readingValue: number;
   category: string;
-  today: string;
+  tags: string[];
 }
 
 const KNOWFLOW_FIELD_ORDER = [
@@ -29,9 +33,11 @@ export function applyArticleFrontmatter(content: string, originalContent: string
   const fields = new Map<string, string | string[]>();
 
   fields.set("创建日期", normalizeCreationDate(getFieldValue(frontmatter, "创建日期"), data.today));
-  fields.set("简要描述", quoteYamlString(data.description.replace(/\n/g, " ").slice(0, 180)));
-  fields.set("阅读价值", data.readingValue > 0 ? String(data.readingValue) : "");
-  fields.set("分类", data.category);
+  // 简要描述/阅读价值/分类/tags are deliberately NOT set here — they're owned
+  // by applySummaryFrontmatter below, called the moment a summary is
+  // generated. Re-running the pipeline just leaves whatever's already
+  // there (or the template's blank placeholder, via the missing-keys pass
+  // further down) instead of overwriting it with stale/default values.
   fields.set("学习日期", normalizeLearningDate(getFieldValue(frontmatter, "学习日期")));
   fields.set("学习状态", normalizeLearningStatus(getFieldBlock(frontmatter, "学习状态")));
   fields.set("状态", "true");
@@ -57,6 +63,26 @@ export function applyArticleFrontmatter(content: string, originalContent: string
   return `---\n${nextFrontmatter.trim()}\n---\n\n${body.replace(/^#\s+/gm, "## ")}\n`;
 }
 
+/**
+ * Called the moment an AI summary is generated — before "整理"
+ * (ClippingPipeline.process()) ever runs — so frontmatter becomes the
+ * source of truth for these four fields immediately. data.json never
+ * caches them, not even transiently (see StoredSummaryMeta in types.ts),
+ * so this is the only place that writes them. Deliberately narrow: it only
+ * touches 简要描述/阅读价值/分类/tags, leaving 创建日期/学习日期/学习状态/状态/
+ * 文章作者 and the body completely alone — that's applyArticleFrontmatter's
+ * job instead.
+ */
+export function applySummaryFrontmatter(content: string, data: SummaryFrontmatterData): string {
+  const { frontmatter, body } = splitFrontmatter(content);
+  let next = frontmatter ?? "";
+  next = upsertFrontmatterField(next, "简要描述", quoteYamlString(data.description.replace(/\n/g, " ").slice(0, 180)), false);
+  next = upsertFrontmatterField(next, "阅读价值", data.readingValue > 0 ? String(data.readingValue) : "", false);
+  next = upsertFrontmatterField(next, "分类", data.category, false);
+  next = upsertFrontmatterField(next, "tags", formatTagsList(data.tags), false);
+  return `---\n${next.trim()}\n---\n${body}`;
+}
+
 export function updateFrontmatterCategory(content: string, category: string): string {
   const parsed = splitFrontmatter(content);
   if (parsed.frontmatter === null) return content;
@@ -64,9 +90,14 @@ export function updateFrontmatterCategory(content: string, category: string): st
   return `---\n${nextFrontmatter.trim()}\n---\n${parsed.body}`;
 }
 
-function splitFrontmatter(content: string): { frontmatter: string | null; body: string } {
+export function splitFrontmatter(content: string): { frontmatter: string | null; body: string } {
   const normalized = content.replace(/\r\n/g, "\n");
-  const match = /^---\n([\s\S]*?)\n---\n?/.exec(normalized);
+  // The `\n?` before the closing fence (rather than a required `\n`) matters
+  // for genuinely empty frontmatter blocks like "---\n---\n": there is only
+  // one newline between the two fences, already consumed by the opening
+  // match, so a mandatory extra `\n` before the close would never match and
+  // the whole block would be silently treated as body text instead.
+  const match = /^---\n([\s\S]*?)\n?---\n?/.exec(normalized);
   if (!match) return { frontmatter: null, body: normalized };
   return {
     frontmatter: match[1],
@@ -78,6 +109,25 @@ function stripFrontmatter(content: string): string {
   return splitFrontmatter(content).body;
 }
 
+/**
+ * This module intentionally parses frontmatter with regex/line-scanning
+ * instead of a real YAML library, so it can round-trip a file while only
+ * touching the specific fields KnowFlow owns — preserving field order,
+ * comments and non-standard Templater expressions (e.g.
+ * `<% tp.date.now("YYYY-MM-DD") %>`) that a YAML parser would either choke
+ * on or silently reformat away. The trade-off is that it only understands a
+ * conventional subset of YAML:
+ * - A top-level key must start at column 0 with no leading whitespace.
+ * - Continuation/block-scalar lines belonging to a key must be indented
+ *   (space or tab; both count as "not a new key" here).
+ * - Duplicate top-level keys are not supported: only the first occurrence
+ *   is read/updated, matching normal YAML semantics loosely but without
+ *   validation.
+ * - A key line's own value is treated as an opaque string; multi-line
+ *   block scalars (`|`, `>`, ...) and inline flow values (`[a, b]`) are
+ *   preserved verbatim rather than being parsed into structured data,
+ *   except for the specific fields KnowFlow rewrites itself.
+ */
 function extractTopLevelKeys(frontmatter: string): string[] {
   return frontmatter
     .split("\n")
@@ -154,6 +204,17 @@ function normalizeCreationDate(value: string | undefined, today: string): string
   const trimmed = value?.trim() ?? "";
   if (!trimmed || trimmed.includes("<%")) return today;
   return trimmed;
+}
+
+/**
+ * Replaces the frontmatter `tags` list with the AI's topic tags every time
+ * the pipeline runs, fully overriding the "clippings" placeholder the
+ * template seeds new notes with — otherwise those AI-generated tags never
+ * end up anywhere Obsidian's own tag search/graph view can see them.
+ */
+function formatTagsList(tags: string[]): string[] {
+  const list = tags.filter((tag) => tag.trim()).length > 0 ? tags.filter((tag) => tag.trim()) : ["clippings"];
+  return ["", ...list.map((tag) => `  - ${tag.trim()}`)];
 }
 
 function normalizeLearningStatus(value: string | string[] | undefined): string[] {

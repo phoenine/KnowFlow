@@ -1,6 +1,5 @@
-import { setIcon } from "obsidian";
 import type { NoteSummary, QuizStats } from "../types";
-import { applyActionLayout, applyMetricsLayout, button, metric, row, section, setStyles, text } from "./dom";
+import { applyActionLayout, applyMetricsLayout, button, cardHeader, metric, row, section, text } from "./dom";
 import { renderBrandShell } from "./shell";
 
 interface ArticleDetailViewProps {
@@ -28,18 +27,7 @@ export function renderArticleDetailView(root: HTMLElement, props: ArticleDetailV
   metric(metrics, "知识点", "V0.2");
 
   const summary = section(content, "kf-summary");
-  const summaryHead = row(summary);
-  setStyles(summaryHead, { justifyContent: "space-between" });
-  const summaryTitle = row(summaryHead);
-  setStyles(summaryTitle, { gap: "8px", minWidth: "0" });
-  const summaryIcon = summaryTitle.createSpan();
-  setIcon(summaryIcon, "sparkles");
-  setStyles(summaryIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
-  });
-  text(summaryTitle, "AI Summary", "kf-card-title");
+  cardHeader(summary, "sparkles", "AI Summary");
   if (props.summary) {
     props.renderMarkdownSummary(summary, props.summary.summary);
   } else {
@@ -47,19 +35,9 @@ export function renderArticleDetailView(root: HTMLElement, props: ArticleDetailV
   }
 
   const mapCard = section(content, "kf-knowledge-map");
-  const mapHead = row(mapCard);
-  setStyles(mapHead, { justifyContent: "space-between" });
-  const mapTitle = row(mapHead);
-  setStyles(mapTitle, { gap: "8px", minWidth: "0" });
-  const mapIcon = mapTitle.createSpan();
-  setIcon(mapIcon, "git-fork");
-  setStyles(mapIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
+  cardHeader(mapCard, "git-fork", "Knowledge Map", (header) => {
+    text(header, "Mermaid", "kf-pill");
   });
-  text(mapTitle, "Knowledge Map", "kf-card-title");
-  text(mapHead, "Mermaid", "kf-pill");
   text(mapCard, "将当前文章的概念结构生成 Mermaid，并插入原文的 ## Knowledge Map 区块。", "kf-muted");
   const mapActions = row(mapCard, "kf-actions");
   applyActionLayout(mapActions);
@@ -67,16 +45,7 @@ export function renderArticleDetailView(root: HTMLElement, props: ArticleDetailV
   button(mapActions, "查看知识点", props.onShowKnowledgePoints);
 
   const quizCard = section(content, "kf-quiz");
-  const quizHead = row(quizCard);
-  setStyles(quizHead, { gap: "8px" });
-  const quizIcon = quizHead.createSpan();
-  setIcon(quizIcon, "list-checks");
-  setStyles(quizIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
-  });
-  text(quizHead, "Quiz", "kf-card-title");
+  cardHeader(quizCard, "list-checks", "Quiz");
   const quizMetrics = row(quizCard, "kf-metrics");
   applyMetricsLayout(quizMetrics);
   metric(quizMetrics, "题目", String(props.quiz.total));

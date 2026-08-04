@@ -110,7 +110,7 @@ export class KnowFlowSettingTab extends PluginSettingTab {
 
     new Setting(vault)
       .setName("Archive folder")
-      .setDesc("Used for exported reports and compatibility output.")
+      .setDesc("Where generated quiz notes are stored (one markdown note per article, instead of growing data.json).")
       .addText((text) =>
         text
           .setPlaceholder("Archives")

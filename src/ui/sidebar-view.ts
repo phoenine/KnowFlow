@@ -1,7 +1,8 @@
 import { ItemView, MarkdownRenderer, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import type KnowFlowPlugin from "../main";
 import { ARTICLE_CATEGORIES } from "../services/clipping-pipeline";
-import { KNOWFLOW_VIEW_TYPE, type ArticleStats, type ChatResult, type PipelineUiState, type QuizSession, type ViewContext } from "../types";
+import type { SummaryText } from "../services/summary-notes";
+import { KNOWFLOW_VIEW_TYPE, type ArticleStats, type ChatResult, type NoteSummary, type PipelineUiState, type QuizSession, type QuizStats, type ViewContext } from "../types";
 import { renderArticleDetailView } from "./article-detail-view";
 import { renderArticlesOverviewView } from "./articles-overview-view";
 import { renderChatComposer, applyChipStyle } from "./chat-composer";
@@ -21,6 +22,10 @@ export class KnowFlowSidebarView extends ItemView {
   private renderedContextKey: string | null = null;
   private composerDraft = "";
   private pendingComposerFocus = false;
+  private quizStatsCache = new Map<string, QuizStats>();
+  private quizStatsPending = new Set<string>();
+  private summaryTextCache = new Map<string, SummaryText | null>();
+  private summaryTextPending = new Set<string>();
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -105,17 +110,18 @@ export class KnowFlowSidebarView extends ItemView {
   private renderClipping(root: HTMLElement, context: ViewContext): void {
     const file = context.activeFile;
     if (!file) return this.renderEmpty(root);
-    const storedSummary = this.plugin.store.getSummary(file.path);
+    const summaryMeta = this.getSummaryMeta(file);
+    const summary = this.getSummaryViewModel(file);
     const summaryPending = this.pendingSummaries.has(file.path);
     const summaryError = this.summaryErrors.get(file.path);
     const analysisCost = estimateClippingAnalysisTokens(file);
     const pipelineState = this.pipelineStates.get(file.path);
     const persistedPipeline = this.plugin.store.getPipelineStatus(file.path);
-    const selectedCategory = this.selectedCategories.get(file.path) ?? storedSummary?.category ?? this.plugin.settings.defaultArticleCategory;
+    const selectedCategory = this.selectedCategories.get(file.path) ?? summaryMeta?.category ?? this.plugin.settings.defaultArticleCategory;
 
     renderClippingView(root, {
       title: file.basename,
-      summary: storedSummary,
+      summary,
       summaryPending,
       summaryError,
       analysisCost,
@@ -123,7 +129,7 @@ export class KnowFlowSidebarView extends ItemView {
       persistedPipeline,
       selectedCategory,
       statusText: this.getPipelineStatusText(pipelineState, persistedPipeline.status),
-      recommendedActionLabel: storedSummary ? this.recommendedActionLabel(storedSummary.recommendedAction) : "--",
+      recommendedActionLabel: summaryMeta ? this.recommendedActionLabel(summaryMeta.recommendedAction) : "--",
       renderMarkdownSummary: (parent, markdown) => void this.renderMarkdownSummary(parent, markdown, file.path),
       onRefreshSummary: () => this.ensureClippingSummary(file, true),
       onGenerateSummary: () => this.ensureClippingSummary(file, true),
@@ -152,7 +158,13 @@ export class KnowFlowSidebarView extends ItemView {
     try {
       const content = await this.app.vault.read(file);
       const summary = await this.plugin.ai.summarize(file.path, file.basename, content, this.plugin.settings.defaultArticleCategory);
+      await this.plugin.summaryNotes.applySummary(
+        file,
+        { summary: summary.summary, reason: summary.reason },
+        { description: summary.briefDescription, readingValue: summary.readingValue, category: summary.category, tags: summary.tags }
+      );
       await this.plugin.store.setSummary(summary);
+      this.summaryTextCache.set(file.path, { summary: summary.summary, reason: summary.reason });
       if (!this.manuallySelectedCategories.has(file.path)) {
         this.selectedCategories.set(file.path, summary.category);
       }
@@ -198,23 +210,23 @@ export class KnowFlowSidebarView extends ItemView {
     const file = context.activeFile;
     if (!file) return this.renderEmpty(root);
 
-    const storedSummary = this.plugin.store.getSummary(file.path);
-    const quiz = this.plugin.store.getQuizStats(file.path);
+    const summaryMeta = this.getSummaryMeta(file);
+    const quiz = this.getQuizStats(file.path);
     const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
-    const readingValue = this.getFrontmatterReadingValue(frontmatter) ?? (storedSummary ? `${storedSummary.readingValue}/5` : "--");
+    const readingValue = this.getFrontmatterReadingValue(frontmatter) ?? (summaryMeta ? `${summaryMeta.readingValue}/5` : "--");
     const learningStatus = this.getFrontmatterLearningStatus(frontmatter) ?? (this.plugin.store.isLearned(file.path) ? "已学习" : "未学习");
 
     renderArticleDetailView(root, {
       title: file.basename,
       readingValue,
       learningStatus,
-      summary: storedSummary,
+      summary: this.getSummaryViewModel(file),
       quiz,
       renderMarkdownSummary: (parent, markdown) => void this.renderMarkdownSummary(parent, markdown, file.path),
       onGenerateKnowledgeMap: () => void this.generateKnowledgeMap(file),
       onShowKnowledgePoints: () => new Notice("Knowledge Points will be implemented in V0.2"),
       onGenerateQuiz: () => void this.generateQuiz(file),
-      onStartQuiz: () => this.startQuiz(file)
+      onStartQuiz: () => void this.startQuiz(file)
     });
 
     this.renderComposer(root, context, file.basename, file);
@@ -306,7 +318,12 @@ export class KnowFlowSidebarView extends ItemView {
     button(actions, "重新生成", () => this.submitChat(result.question));
     button(actions, "存为摘要", async () => {
       if (!result.filePath) return;
-      await this.plugin.store.setSummary({
+      const target = this.app.vault.getAbstractFileByPath(result.filePath);
+      if (!(target instanceof TFile)) {
+        new Notice("关联文章不存在。");
+        return;
+      }
+      const summary: NoteSummary = {
         filePath: result.filePath,
         title: result.contextLabel,
         briefDescription: result.answer.replace(/\s+/g, " ").slice(0, 160),
@@ -317,7 +334,14 @@ export class KnowFlowSidebarView extends ItemView {
         reason: "用户从 Chat Result 手动保存为摘要。",
         tags: [],
         updatedAt: new Date().toISOString()
-      });
+      };
+      await this.plugin.summaryNotes.applySummary(
+        target,
+        { summary: summary.summary, reason: summary.reason },
+        { description: summary.briefDescription, readingValue: summary.readingValue, category: summary.category, tags: summary.tags }
+      );
+      await this.plugin.store.setSummary(summary);
+      this.summaryTextCache.set(result.filePath, { summary: summary.summary, reason: summary.reason });
       new Notice("Saved as AI Summary");
     });
     button(actions, "生成 Quiz", async () => {
@@ -398,9 +422,9 @@ export class KnowFlowSidebarView extends ItemView {
         state.running = false;
         this.pipelineStates.set(file.path, state);
       }
-      const summary = this.plugin.store.getSummary(file.path);
-      if (summary && !this.manuallySelectedCategories.has(file.path)) {
-        this.selectedCategories.set(file.path, summary.category);
+      const summaryMeta = this.getSummaryMeta(file);
+      if (summaryMeta && !this.manuallySelectedCategories.has(file.path)) {
+        this.selectedCategories.set(file.path, summaryMeta.category);
       }
       this.render();
     } catch (error) {
@@ -440,13 +464,15 @@ export class KnowFlowSidebarView extends ItemView {
   private async generateQuiz(file: TFile): Promise<void> {
     try {
       const content = await this.app.vault.read(file);
-      const readingValue = (this.plugin.store.getSummary(file.path)?.readingValue ?? this.getArticleReadingValue(file)) || 3;
+      const readingValue = this.getArticleReadingValue(file) || 3;
       const count = readingValue >= 4 ? 8 : readingValue >= 2 ? 5 : 3;
       const questions = await this.plugin.ai.generateQuiz(file.path, file.basename, content, count);
       if (questions.length === 0) {
         throw new Error("Quiz model did not return valid questions.");
       }
-      await this.plugin.store.setQuizzes(file.path, questions);
+      const category = this.getSummaryMeta(file)?.category ?? this.plugin.settings.defaultArticleCategory;
+      await this.plugin.quizNotes.saveQuiz(file, category, questions);
+      this.quizStatsCache.delete(file.path);
       new Notice(`KnowFlow: generated ${questions.length} quiz questions`);
       this.render();
     } catch (error) {
@@ -454,16 +480,17 @@ export class KnowFlowSidebarView extends ItemView {
     }
   }
 
-  private startQuiz(file: TFile): void {
-    const questions = this.plugin.store.getQuizzes(file.path);
-    if (questions.length === 0) {
+  private async startQuiz(file: TFile): Promise<void> {
+    const loaded = await this.plugin.quizNotes.loadQuestions(file.path);
+    if (!loaded || loaded.questions.length === 0) {
       new Notice("请先生成试题。");
       return;
     }
     this.quizSession = {
       filePath: file.path,
+      quizPath: loaded.quizPath,
       title: file.basename,
-      questions,
+      questions: loaded.questions,
       index: 0,
       selectedKey: null,
       submitted: false
@@ -477,29 +504,73 @@ export class KnowFlowSidebarView extends ItemView {
       new Notice("请选择一个答案。");
       return;
     }
-    await this.plugin.store.addQuizAttempt({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      quizId: question.id,
-      notePath: session.filePath,
-      answerKey: session.selectedKey,
-      correct: session.selectedKey === question.answerKey,
-      createdAt: new Date().toISOString()
-    });
+    // The question's position within the note (1-based) doubles as its
+    // identity for patching — quiz notes don't need separate stable IDs
+    // since regenerating a quiz always rewrites the whole file anyway.
+    await this.plugin.quizNotes.recordAnswer(session.quizPath, session.index + 1, session.selectedKey, question.answerKey);
+    this.quizStatsCache.delete(session.filePath);
     session.submitted = true;
     this.render();
   }
 
-  private showLastPipeline(parent: HTMLElement): void {
-    const latest = this.plugin.store.getPipelineResults()[0];
-    if (!latest) {
-      new Notice("No pipeline record yet");
-      return;
+  private getQuizStats(path: string): QuizStats {
+    const cached = this.quizStatsCache.get(path);
+    if (cached) return cached;
+    void this.refreshQuizStats(path);
+    return { total: 0, answered: 0, accuracy: null, wrong: 0 };
+  }
+
+  private async refreshQuizStats(path: string): Promise<void> {
+    if (this.quizStatsPending.has(path)) return;
+    this.quizStatsPending.add(path);
+    try {
+      const stats = await this.plugin.quizNotes.getStats(path);
+      this.quizStatsCache.set(path, stats);
+      if (this.plugin.router.getContext().activeFile?.path === path) {
+        this.render();
+      }
+    } finally {
+      this.quizStatsPending.delete(path);
     }
-    const record = section(parent, "kf-record");
-    text(record, "最近处理记录", "kf-card-title");
-    text(record, `阅读价值：${latest.readingValue}/5`, "kf-muted");
-    text(record, `分类：${latest.category}`, "kf-muted");
-    text(record, `文件位置：${latest.targetPath}`, "kf-muted");
+  }
+
+  /**
+   * Merges the small metadata cached in data.json with the long-form
+   * summary/reason text, which lives in the note's own callout (see
+   * summary-notes.ts) and is only loaded on demand for whichever single
+   * note is currently open — never for bulk list views.
+   */
+  private getSummaryViewModel(file: TFile): NoteSummary | null {
+    const meta = this.getSummaryMeta(file);
+    if (!meta) return null;
+    const text = this.loadSummaryText(file);
+    return {
+      ...meta,
+      filePath: file.path,
+      title: file.basename,
+      summary: text?.summary ?? "正在读取摘要正文...",
+      reason: text?.reason ?? ""
+    };
+  }
+
+  private loadSummaryText(file: TFile): SummaryText | null {
+    if (this.summaryTextCache.has(file.path)) return this.summaryTextCache.get(file.path) ?? null;
+    void this.refreshSummaryText(file);
+    return null;
+  }
+
+  private async refreshSummaryText(file: TFile): Promise<void> {
+    if (this.summaryTextPending.has(file.path)) return;
+    this.summaryTextPending.add(file.path);
+    try {
+      const text = await this.plugin.summaryNotes.loadSummaryText(file);
+      this.summaryTextCache.set(file.path, text);
+      if (this.plugin.router.getContext().activeFile?.path === file.path) {
+        this.render();
+      }
+    } finally {
+      this.summaryTextPending.delete(file.path);
+    }
   }
 
   private getArticleStats(scopePath: string): ArticleStats {
@@ -517,13 +588,17 @@ export class KnowFlowSidebarView extends ItemView {
 
   private getClippingStats(): { total: number; summarized: number; highValue: number } {
     const files = this.app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(`${this.plugin.settings.clippingFolder}/`));
-    const summaries = files
-      .map((file) => this.plugin.store.getSummary(file.path))
-      .filter((summary): summary is NonNullable<typeof summary> => Boolean(summary));
+    // "summarized" only needs a stored record to exist (it always keeps
+    // recommendedAction/updatedAt even once the other fields have moved to
+    // frontmatter), but readingValue itself has to go through the merged
+    // getter — a clipping can already be pipeline-processed (and so have
+    // its readingValue stripped from data.json) while still physically
+    // sitting in the clippings folder, since moving it out is a separate step.
+    const summarized = files.filter((file) => this.plugin.store.getSummary(file.path) !== null);
     return {
       total: files.length,
-      summarized: summaries.length,
-      highValue: summaries.filter((summary) => summary.readingValue >= 4).length
+      summarized: summarized.length,
+      highValue: summarized.filter((file) => this.getArticleReadingValue(file) >= 4).length
     };
   }
 
@@ -566,13 +641,60 @@ export class KnowFlowSidebarView extends ItemView {
 
   private getArticleReadingValue(file: TFile): number {
     const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    return this.getFrontmatterReadingValueNumber(frontmatter) ?? 0;
+  }
+
+  private getFrontmatterReadingValueNumber(frontmatter: Record<string, unknown> | undefined): number | null {
     const value = frontmatter?.["阅读价值"];
     if (typeof value === "number") return value;
     if (typeof value === "string") {
       const parsed = Number.parseInt(value, 10);
-      return Number.isFinite(parsed) ? parsed : 0;
+      return Number.isFinite(parsed) ? parsed : null;
     }
-    return this.plugin.store.getSummary(file.path)?.readingValue ?? 0;
+    return null;
+  }
+
+  private getFrontmatterCategory(frontmatter: Record<string, unknown> | undefined): string | null {
+    const value = frontmatter?.["分类"];
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+
+  private getFrontmatterBriefDescription(frontmatter: Record<string, unknown> | undefined): string | null {
+    const value = frontmatter?.["简要描述"];
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+
+  private getFrontmatterTags(frontmatter: Record<string, unknown> | undefined): string[] | null {
+    const value = frontmatter?.tags;
+    if (Array.isArray(value)) {
+      const tags = value.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0);
+      return tags.length > 0 ? tags : null;
+    }
+    if (typeof value === "string" && value.trim()) return [value.trim()];
+    return null;
+  }
+
+  /**
+   * briefDescription/readingValue/category/tags are read straight from
+   * the note's own frontmatter — never from data.json, which doesn't
+   * cache them at all (see StoredSummaryMeta) since applySummaryFrontmatter
+   * writes them there the moment a summary is generated. Only
+   * recommendedAction/updatedAt come from the store, since frontmatter has
+   * nowhere to hold those. Returns null if the note has never been
+   * summarized at all.
+   */
+  private getSummaryMeta(file: TFile): (Omit<NoteSummary, "filePath" | "title" | "summary" | "reason">) | null {
+    const stored = this.plugin.store.getSummary(file.path);
+    if (!stored) return null;
+    const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    return {
+      briefDescription: this.getFrontmatterBriefDescription(frontmatter) ?? "",
+      readingValue: this.getFrontmatterReadingValueNumber(frontmatter) ?? 0,
+      category: this.getFrontmatterCategory(frontmatter) ?? this.plugin.settings.defaultArticleCategory,
+      tags: this.getFrontmatterTags(frontmatter) ?? [],
+      recommendedAction: stored.recommendedAction,
+      updatedAt: stored.updatedAt
+    };
   }
 
   private getFrontmatterLearningDate(frontmatter: Record<string, unknown> | undefined): Date | null {

@@ -14,7 +14,9 @@ await esbuild.build({
   platform: "node"
 });
 const { cleanupPromotionalNoise } = await import(pathToFileURL(join(tempDir, "cleanup-rules.js")).href);
-const { applyArticleFrontmatter, updateFrontmatterCategory } = await import(pathToFileURL(join(tempDir, "frontmatter-rules.js")).href);
+const { applyArticleFrontmatter, applySummaryFrontmatter, updateFrontmatterCategory } = await import(
+  pathToFileURL(join(tempDir, "frontmatter-rules.js")).href
+);
 
 const articleWithRealRecommendation = [
   "## 背景",
@@ -80,20 +82,23 @@ const originalWithComplexFrontmatter = [
   "正文"
 ].join("\n");
 
+// applyArticleFrontmatter ("整理") deliberately does NOT touch
+// 简要描述/阅读价值/分类/tags any more — those are owned exclusively by
+// applySummaryFrontmatter, called the moment a summary is generated (see
+// SummaryNoteService.applySummary). Re-running the pipeline must preserve
+// whatever's already there (or the template's blank default if a summary
+// was never generated) instead of overwriting it with stale/fallback data.
 const frontmatterUpdated = applyArticleFrontmatter("正文", originalWithComplexFrontmatter, template, {
   title: "标题",
-  description: "新的描述: 保留冒号",
-  readingValue: 4,
-  category: "系统架构",
   today: "2026-08-04"
 });
 
 assert.ok(frontmatterUpdated.includes("aliases:\n  - 原别名"));
 assert.ok(frontmatterUpdated.includes("custom:\n  nested: value:with:colon"));
 assert.ok(frontmatterUpdated.includes("description: |\n  第一行\n  第二行"));
-assert.ok(frontmatterUpdated.includes("简要描述: \"新的描述: 保留冒号\""));
-assert.ok(frontmatterUpdated.includes("阅读价值: 4"));
-assert.ok(frontmatterUpdated.includes("分类: 系统架构"));
+assert.ok(frontmatterUpdated.includes("分类: 旧分类"), "an existing 分类 must be preserved, not overwritten");
+assert.ok(frontmatterUpdated.includes("简要描述:\n"), "a never-generated 简要描述 falls back to the template's blank placeholder");
+assert.ok(frontmatterUpdated.includes("tags:\n"), "a never-generated tags falls back to the template's blank placeholder");
 assert.ok(frontmatterUpdated.includes("学习日期:\n"));
 assert.ok(frontmatterUpdated.includes("学习状态:\n  - 学习中"));
 assert.ok(frontmatterUpdated.includes("状态: true"));
@@ -102,6 +107,38 @@ assert.ok(frontmatterUpdated.includes("\n正文\n"));
 const movedCategory = updateFrontmatterCategory(frontmatterUpdated, "知识积累");
 assert.ok(movedCategory.includes("分类: 知识积累"));
 assert.ok(movedCategory.includes("description: |\n  第一行\n  第二行"));
+
+// applySummaryFrontmatter is what actually writes the AI's analysis into
+// frontmatter, the moment a summary is generated — before "整理" ever
+// runs. It must only touch these four keys, leaving everything else
+// (including the body) completely alone.
+{
+  const original = [
+    "---",
+    "创建日期: 2026-08-01",
+    "分类: 旧分类",
+    "学习状态:",
+    "  - 学习中",
+    "---",
+    "# 原文标题",
+    "正文内容"
+  ].join("\n");
+
+  const withSummary = applySummaryFrontmatter(original, {
+    description: "新的描述: 保留冒号",
+    readingValue: 4,
+    category: "系统架构",
+    tags: ["架构", "系统设计"]
+  });
+
+  assert.ok(withSummary.includes("简要描述: \"新的描述: 保留冒号\""));
+  assert.ok(withSummary.includes("阅读价值: 4"));
+  assert.ok(withSummary.includes("分类: 系统架构"), "applySummaryFrontmatter overwrites 分类 with the AI's suggestion");
+  assert.ok(withSummary.includes("tags:\n  - 架构\n  - 系统设计"));
+  assert.ok(withSummary.includes("创建日期: 2026-08-01"), "fields it doesn't own must be untouched");
+  assert.ok(withSummary.includes("学习状态:\n  - 学习中"), "fields it doesn't own must be untouched");
+  assert.ok(withSummary.includes("# 原文标题\n正文内容"), "the body must be completely untouched");
+}
 
 await rm(tempDir, { recursive: true, force: true });
 console.log("cleanup tests passed");

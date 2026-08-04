@@ -1,6 +1,6 @@
 import { Notice, TFile, normalizePath } from "obsidian";
 import type { App } from "obsidian";
-import type { KnowFlowSettings, PipelineResult } from "../types";
+import type { KnowFlowSettings } from "../types";
 import type { AiService } from "./ai-service";
 import { cleanupPromotionalNoise } from "./cleanup-rules";
 import { applyArticleFrontmatter, updateFrontmatterCategory } from "./frontmatter-rules";
@@ -33,7 +33,7 @@ export class ClippingPipeline {
     this.settings = settings;
   }
 
-  async process(file: TFile, onProgress?: (step: string) => void): Promise<PipelineResult> {
+  async process(file: TFile, onProgress?: (step: string) => void): Promise<void> {
     const report = async (step: string): Promise<void> => {
       onProgress?.(step);
       await Promise.resolve();
@@ -43,9 +43,6 @@ export class ClippingPipeline {
       await report("清理残留格式");
       const original = await this.app.vault.read(file);
       const title = file.basename;
-      const summary = this.store.getSummary(file.path);
-      const suggestedCategory = summary?.category;
-      const fallbackCategory = suggestedCategory || this.settings.defaultArticleCategory;
       let formatted = this.stripFrontmatterBody(original);
       this.assertReadableBody(formatted);
 
@@ -64,32 +61,16 @@ export class ClippingPipeline {
       formatted = await this.ai.polishClippingMarkdown(title, formatted);
       const normalized = this.normalizeFinalBody(formatted);
       await report("补全 Frontmatter");
-      const withFrontmatter = await this.applyFrontmatter(normalized, original, {
-        title,
-        description: summary?.briefDescription ?? "",
-        readingValue: summary?.readingValue ?? 0,
-        category: summary?.category ?? fallbackCategory
-      });
+      const withFrontmatter = await this.applyFrontmatter(normalized, original, { title });
 
       await this.app.vault.modify(file, withFrontmatter);
 
-      const result: PipelineResult = {
-        sourcePath: file.path,
-        targetPath: file.path,
-        title,
-        category: summary?.category ?? fallbackCategory,
-        readingValue: summary?.readingValue ?? 0,
-        summary: summary?.summary ?? "",
-        updatedAt: new Date().toISOString()
-      };
-      await this.store.addPipelineResult(result);
-      await this.store.setPipelineStatus({
+      await this.store.recordPipelineSuccess({
         path: file.path,
         status: "processed",
-        updatedAt: result.updatedAt
+        updatedAt: new Date().toISOString()
       });
       new Notice("KnowFlow: clipping formatted");
-      return result;
     } catch (error) {
       await this.store.setPipelineStatus({
         path: file.path,
@@ -116,22 +97,8 @@ export class ClippingPipeline {
 
     const moved = this.app.vault.getAbstractFileByPath(targetPath);
     const movedFile = moved instanceof TFile ? moved : file;
-    await this.store.migratePath(oldPath, movedFile.path);
 
-    const summary = this.store.getSummary(movedFile.path);
-    if (summary) {
-      await this.store.setSummary({ ...summary, filePath: movedFile.path, category });
-    }
-
-    await this.store.addPipelineResult({
-      sourcePath: oldPath,
-      targetPath: movedFile.path,
-      title: movedFile.basename,
-      category,
-      readingValue: summary?.readingValue ?? 0,
-      summary: summary?.summary ?? "",
-      updatedAt: new Date().toISOString()
-    });
+    await this.store.recordCategoryMove({ oldPath, newPath: movedFile.path });
     new Notice(`KnowFlow: moved to ${category}`);
     return movedFile;
   }
@@ -285,7 +252,7 @@ export class ClippingPipeline {
   private async applyFrontmatter(
     content: string,
     originalContent: string,
-    data: { title: string; description: string; readingValue: number; category: string }
+    data: { title: string }
   ): Promise<string> {
     const today = window.moment().format("YYYY-MM-DD");
     const template = await this.readTemplateFrontmatter();

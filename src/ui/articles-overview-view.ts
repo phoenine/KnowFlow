@@ -1,6 +1,5 @@
-import { setIcon } from "obsidian";
 import type { ArticleStats } from "../types";
-import { applyMetricsLayout, button, metric, row, section, setStyles, text } from "./dom";
+import { applyMetricsLayout, button, cardHeader, metric, row, section, setStyles, text } from "./dom";
 import { renderBrandShell } from "./shell";
 
 interface ArticlesOverviewViewProps {
@@ -19,19 +18,9 @@ export function renderArticlesOverviewView(root: HTMLElement, props: ArticlesOve
   const content = renderBrandShell(root, "Articles overview");
 
   const daily = section(content, "kf-daily");
-  const dailyHead = row(daily);
-  setStyles(dailyHead, { justifyContent: "space-between" });
-  const dailyTitle = row(dailyHead);
-  setStyles(dailyTitle, { gap: "8px", minWidth: "0" });
-  const dailyIcon = dailyTitle.createSpan();
-  setIcon(dailyIcon, "calendar-check");
-  setStyles(dailyIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
+  cardHeader(daily, "calendar-check", "Daily Learning", (header) => {
+    text(header, "今日", "kf-pill");
   });
-  text(dailyTitle, "Daily Learning", "kf-card-title");
-  text(dailyHead, "今日", "kf-pill");
   const dailyMetrics = row(daily, "kf-metrics");
   applyMetricsLayout(dailyMetrics);
   metric(dailyMetrics, "新文章", String(props.dailyNew));
@@ -43,31 +32,13 @@ export function renderArticlesOverviewView(root: HTMLElement, props: ArticlesOve
   button(daily, "开始今日学习任务", props.onStartDaily, true);
 
   const progress = section(content, "kf-progress");
-  const progressHead = row(progress);
-  setStyles(progressHead, { gap: "8px" });
-  const progressIcon = progressHead.createSpan();
-  setIcon(progressIcon, "trending-up");
-  setStyles(progressIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
-  });
-  text(progressHead, "学习进度", "kf-card-title");
+  cardHeader(progress, "trending-up", "学习进度");
   progressRow(progress, "本周阅读", `${props.weeklyLearned} 篇`, props.weeklyLearned > 0 ? "持续" : "待开始");
   progressRow(progress, "本周复习", `${props.dailyReview} 次`, props.dailyReview > 0 ? "待处理" : "无到期");
   progressRow(progress, "平均正确率", "--", "生成 Quiz 后统计");
 
   const clipping = section(content, "kf-clipping-stats");
-  const clippingHead = row(clipping);
-  setStyles(clippingHead, { gap: "8px" });
-  const clippingIcon = clippingHead.createSpan();
-  setIcon(clippingIcon, "inbox");
-  setStyles(clippingIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
-  });
-  text(clippingHead, "Clipping 统计", "kf-card-title");
+  cardHeader(clipping, "inbox", "Clipping 统计");
   const clippingMetrics = row(clipping, "kf-metrics");
   applyMetricsLayout(clippingMetrics);
   metric(clippingMetrics, "待整理", String(props.clippingStats.total));
@@ -75,19 +46,9 @@ export function renderArticlesOverviewView(root: HTMLElement, props: ArticlesOve
   metric(clippingMetrics, "高价值", String(props.clippingStats.highValue));
 
   const articles = section(content, "kf-article-categories");
-  const articlesHead = row(articles);
-  setStyles(articlesHead, { justifyContent: "space-between" });
-  const articlesTitle = row(articlesHead);
-  setStyles(articlesTitle, { gap: "8px", minWidth: "0" });
-  const articlesIcon = articlesTitle.createSpan();
-  setIcon(articlesIcon, "folder-open");
-  setStyles(articlesIcon, {
-    color: "var(--interactive-accent)",
-    display: "inline-flex",
-    flex: "0 0 auto"
+  cardHeader(articles, "folder-open", "Articles 分类统计", (header) => {
+    text(header, props.scopeLabel, "kf-pill");
   });
-  text(articlesTitle, "Articles 分类统计", "kf-card-title");
-  text(articlesHead, props.scopeLabel, "kf-pill");
   const articleMetrics = row(articles, "kf-metrics");
   applyMetricsLayout(articleMetrics);
   metric(articleMetrics, "文章", String(props.stats.total));

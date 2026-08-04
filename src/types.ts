@@ -50,8 +50,32 @@ export interface NoteSummary {
   updatedAt: string;
 }
 
+/**
+ * What actually lives in data.json for a summarized note. Everything else
+ * in NoteSummary is derived or written elsewhere instead of being cached
+ * here a second time:
+ * - `summary`/`reason` (the long-form text) live in a callout in the
+ *   note's own body (see summary-notes.ts).
+ * - `briefDescription`/`readingValue`/`category`/`tags` are written into
+ *   the note's own frontmatter the moment a summary is generated (see
+ *   applySummaryFrontmatter in frontmatter-rules.ts, called from
+ *   SummaryNoteService.applySummary) — sidebar-view.ts's getSummaryMeta
+ *   reads them from there, with no data.json fallback, so there is never
+ *   a second copy to go stale.
+ * - `filePath`/`title` are dropped because the record is already keyed
+ *   by path and title is just the file's basename.
+ *
+ * `recommendedAction` has nowhere else to live (it's not a frontmatter
+ * field), and `updatedAt` is what tells the UI a summary exists at all.
+ */
+export interface StoredSummaryMeta {
+  recommendedAction: NoteSummary["recommendedAction"];
+  updatedAt: string;
+}
+
 export interface QuizStats {
   total: number;
+  answered: number;
   accuracy: number | null;
   wrong: number;
 }
@@ -73,32 +97,14 @@ export interface QuizQuestion {
   createdAt: string;
 }
 
-export interface QuizAttempt {
-  id: string;
-  quizId: string;
-  notePath: string;
-  answerKey: string;
-  correct: boolean;
-  createdAt: string;
-}
-
 export interface QuizSession {
   filePath: string;
+  quizPath: string;
   title: string;
   questions: QuizQuestion[];
   index: number;
   selectedKey: string | null;
   submitted: boolean;
-}
-
-export interface PipelineResult {
-  sourcePath: string;
-  targetPath: string;
-  title: string;
-  category: string;
-  readingValue: number;
-  summary: string;
-  updatedAt: string;
 }
 
 export interface PipelineStatus {

@@ -4,7 +4,9 @@ import { ClippingPipeline } from "./services/clipping-pipeline";
 import { MermaidService } from "./services/mermaid-service";
 import { PathRouter } from "./services/path-router";
 import { PluginDataManager } from "./services/plugin-data-manager";
+import { QuizNoteService } from "./services/quiz-note-service";
 import { KnowledgeStore } from "./services/store";
+import { SummaryNoteService } from "./services/summary-note-service";
 import { DEFAULT_SETTINGS, KnowFlowSettingTab } from "./settings";
 import { KNOWFLOW_VIEW_TYPE, type AiModelConfig, type KnowFlowSettings } from "./types";
 import { KnowFlowSidebarView } from "./ui/sidebar-view";
@@ -16,6 +18,8 @@ export default class KnowFlowPlugin extends Plugin {
   ai: AiService;
   mermaid: MermaidService;
   pipeline: ClippingPipeline;
+  quizNotes: QuizNoteService;
+  summaryNotes: SummaryNoteService;
   private dataManager: PluginDataManager;
 
   async onload(): Promise<void> {
@@ -36,6 +40,9 @@ export default class KnowFlowPlugin extends Plugin {
     this.mermaid = new MermaidService(this.app);
     this.router = new PathRouter(this.app, this.settings);
     this.pipeline = new ClippingPipeline(this.app, this.settings, this.store, this.ai);
+    this.quizNotes = new QuizNoteService(this.app, this.settings, this.store);
+    this.summaryNotes = new SummaryNoteService(this.app);
+    await this.migrateLegacySummaryText();
 
     this.registerView(KNOWFLOW_VIEW_TYPE, (leaf) => new KnowFlowSidebarView(leaf, this));
 
@@ -103,12 +110,48 @@ export default class KnowFlowPlugin extends Plugin {
       }
       this.refreshView();
     }));
+    this.registerEvent(this.app.vault.on("delete", (file) => {
+      if (file instanceof TFile) {
+        void this.store.forgetPath(file.path).then(() => this.refreshView());
+        return;
+      }
+      if (file instanceof TFolder) {
+        // Same "single event for the folder itself" caveat as rename above:
+        // clean up every stored record under the deleted folder in one pass.
+        void this.store.forgetFolder(file.path).then(() => this.refreshView());
+        return;
+      }
+      this.refreshView();
+    }));
 
     this.addSettingTab(new KnowFlowSettingTab(this.app, this));
   }
 
   onunload(): void {
     this.app.workspace.detachLeavesOfType(KNOWFLOW_VIEW_TYPE);
+  }
+
+  /**
+   * One-time upgrade path: older plugin versions stored the full AI
+   * summary/reason text in data.json. That text now lives in each note's
+   * own callout instead (see summary-notes.ts), so any such text found by
+   * store.load() is written into its note here, rather than being
+   * silently dropped the first time this version runs.
+   */
+  private async migrateLegacySummaryText(): Promise<void> {
+    const legacy = this.store.takeLegacySummaryText();
+    const paths = Object.keys(legacy);
+    if (paths.length === 0) return;
+
+    for (const path of paths) {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile) {
+        await this.summaryNotes.applySummary(file, legacy[path]);
+      }
+    }
+    // Persist now so the stripped-down summaries (without the migrated
+    // text) are what's on disk, even if the user never saves anything else.
+    await this.store.save();
   }
 
   async loadSettings(): Promise<void> {
@@ -122,6 +165,7 @@ export default class KnowFlowPlugin extends Plugin {
     this.router?.updateSettings(this.settings);
     this.ai?.updateSettings(this.settings);
     this.pipeline?.updateSettings(this.settings);
+    this.quizNotes?.updateSettings(this.settings);
     this.refreshView();
   }
 

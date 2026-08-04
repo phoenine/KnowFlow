@@ -33,6 +33,7 @@ export function renderQuizTestView(root: HTMLElement, props: QuizTestViewProps):
     const isWrong = session.submitted && selected && option.key !== question.answerKey;
     const optionButton = options.createEl("button", { text: `${option.key}. ${option.content}` });
     setStyles(optionButton, {
+      alignItems: "flex-start",
       backgroundColor: isCorrect
         ? "color-mix(in srgb, var(--interactive-accent) 18%, var(--background-primary))"
         : isWrong
@@ -44,17 +45,45 @@ export function renderQuizTestView(root: HTMLElement, props: QuizTestViewProps):
       borderRadius: "8px",
       color: "var(--text-normal)",
       cursor: session.submitted ? "default" : "pointer",
+      display: "flex",
       fontSize: "13px",
+      height: "auto",
+      justifyContent: "flex-start",
       lineHeight: "1.45",
       padding: "9px 10px",
-      textAlign: "left"
+      textAlign: "left",
+      whiteSpace: "normal",
+      width: "100%",
+      wordBreak: "break-word"
     });
     optionButton.disabled = session.submitted;
     optionButton.addEventListener("click", () => props.onSelect(option.key));
   }
 
   if (session.submitted) {
-    text(card, question.explanation || "暂无解析。", "kf-muted");
+    const isCorrect = session.selectedKey === question.answerKey;
+    const correctOption = question.options.find((option) => option.key === question.answerKey);
+    const accentColor = isCorrect ? "var(--interactive-accent)" : "var(--text-error)";
+
+    const explanation = card.createDiv({ cls: "kf-quiz-explanation" });
+    setStyles(explanation, {
+      backgroundColor: `color-mix(in srgb, ${accentColor} 8%, var(--background-secondary))`,
+      border: `1px solid color-mix(in srgb, ${accentColor} 22%, var(--background-modifier-border))`,
+      borderRadius: "8px",
+      display: "flex",
+      flexDirection: "column",
+      gap: "6px",
+      padding: "10px 12px"
+    });
+    setStyles(explanation.createDiv({ text: `${isCorrect ? "✓" : "✗"} 正确答案：${question.answerKey}. ${correctOption?.content ?? ""}` }), {
+      color: accentColor,
+      fontSize: "13px",
+      fontWeight: "650",
+      lineHeight: "1.45"
+    });
+    if (question.explanation) {
+      text(explanation, question.explanation, "kf-muted");
+    }
   }
 
   const actions = row(card, "kf-actions");
