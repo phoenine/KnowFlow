@@ -1,0 +1,28 @@
+{
+  "name": "knowflow",
+  "version": "0.1.0",
+  "description": "AI-driven Obsidian learning assistant for clipping cleanup and article study.",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "install:dev": "npm run build && node scripts/install-dev.mjs",
+    "test": "npm run build && node scripts/test-cleanup.mjs",
+    "typecheck": "tsc -noEmit -skipLibCheck"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "learning",
+    "notes"
+  ],
+  "author": "phoenine",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.28.1",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.7.2"
+  }
+}
