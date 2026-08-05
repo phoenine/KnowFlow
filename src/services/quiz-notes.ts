@@ -7,6 +7,8 @@ import type { QuizOption, QuizQuestion, QuizStats } from "../types";
 // for "study-quiz" marker blocks and ```Answer fold``` code blocks.
 const QUIZ_BLOCK_START = "<!-- study-quiz:start -->";
 const QUIZ_BLOCK_END = "<!-- study-quiz:end -->";
+const QUIZ_CALLOUT_TITLE = "> [!question]- Quiz";
+const QUIZ_CALLOUT_TITLE_PATTERN = /^> \[!question\][+-]? Quiz\s*$/;
 
 export interface QuizNoteMeta {
   sourcePath: string;
@@ -43,6 +45,51 @@ export function buildQuizNoteContent(meta: QuizNoteMeta, questions: QuizQuestion
   const blocks = questions.map((question, index) => renderQuestionBlock(question, index + 1)).join("\n\n");
   const body = [QUIZ_BLOCK_START, "", blocks, QUIZ_BLOCK_END].join("\n");
   return `---\n${frontmatter}\n---\n\n${body}\n`;
+}
+
+/** Updates only the source-note wikilink in a generated quiz note. */
+export function updateQuizSourcePath(content: string, sourcePath: string): string {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const frontmatterMatch = /^---\n([\s\S]*?)\n---\n?/.exec(normalized);
+  if (!frontmatterMatch || !/^原文:/m.test(frontmatterMatch[1])) return content;
+
+  const linkTarget = sourcePath.replace(/\.md$/i, "");
+  const nextFrontmatter = frontmatterMatch[1].replace(/^原文:.*$/m, `原文: "[[${linkTarget}]]"`);
+  return `${normalized.slice(0, frontmatterMatch.index)}---\n${nextFrontmatter}\n---\n${normalized.slice(frontmatterMatch[0].length)}`;
+}
+
+export function buildQuizCallout(quizPath: string): string {
+  const linkTarget = quizPath.replace(/\.md$/i, "");
+  return `${QUIZ_CALLOUT_TITLE}\n> [[${linkTarget}|开始测试]]`;
+}
+
+export function parseQuizCallout(content: string): string | null {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const range = findQuizCalloutRange(lines);
+  if (!range) return null;
+  const block = lines.slice(range.start + 1, range.end).join("\n");
+  const link = />\s*\[\[([^|\]#]+)(?:#[^|\]]+)?(?:\|[^\]]*)?\]\]/.exec(block);
+  if (!link) return null;
+  const target = link[1].trim();
+  return target.toLowerCase().endsWith(".md") ? target : `${target}.md`;
+}
+
+/** Keeps exactly one managed Quiz callout at the end of the source note. */
+export function upsertQuizCallout(content: string, quizPath: string): string {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const kept: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (QUIZ_CALLOUT_TITLE_PATTERN.test(lines[index])) {
+      index += 1;
+      while (index < lines.length && lines[index].startsWith(">")) index += 1;
+      continue;
+    }
+    kept.push(lines[index]);
+    index += 1;
+  }
+  const body = kept.join("\n").trimEnd();
+  return `${body}${body ? "\n\n" : ""}${buildQuizCallout(quizPath)}\n`;
 }
 
 /** Reconstructs the structured question bank from a quiz note's markdown. */
@@ -123,6 +170,14 @@ function renderQuestionBlock(question: QuizQuestion, displayIndex: number): stri
     `- 解析：${explanation}`,
     "```"
   ].join("\n");
+}
+
+function findQuizCalloutRange(lines: string[]): { start: number; end: number } | null {
+  const start = lines.findIndex((line) => QUIZ_CALLOUT_TITLE_PATTERN.test(line));
+  if (start < 0) return null;
+  let end = start + 1;
+  while (end < lines.length && lines[end].startsWith(">")) end += 1;
+  return { start, end };
 }
 
 function extractQuizBody(content: string): string | null {

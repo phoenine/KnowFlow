@@ -47,30 +47,6 @@ export interface NoteSummary {
   category: string;
   reason: string;
   tags: string[];
-  updatedAt: string;
-}
-
-/**
- * What actually lives in data.json for a summarized note. Everything else
- * in NoteSummary is derived or written elsewhere instead of being cached
- * here a second time:
- * - `summary`/`reason` (the long-form text) live in a callout in the
- *   note's own body (see summary-notes.ts).
- * - `briefDescription`/`readingValue`/`category`/`tags` are written into
- *   the note's own frontmatter the moment a summary is generated (see
- *   applySummaryFrontmatter in frontmatter-rules.ts, called from
- *   SummaryNoteService.applySummary) — sidebar-view.ts's getSummaryMeta
- *   reads them from there, with no data.json fallback, so there is never
- *   a second copy to go stale.
- * - `filePath`/`title` are dropped because the record is already keyed
- *   by path and title is just the file's basename.
- *
- * `recommendedAction` has nowhere else to live (it's not a frontmatter
- * field), and `updatedAt` is what tells the UI a summary exists at all.
- */
-export interface StoredSummaryMeta {
-  recommendedAction: NoteSummary["recommendedAction"];
-  updatedAt: string;
 }
 
 export interface QuizStats {

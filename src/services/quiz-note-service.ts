@@ -1,20 +1,17 @@
 import { TFile, normalizePath } from "obsidian";
 import type { App } from "obsidian";
 import type { KnowFlowSettings, QuizQuestion, QuizStats } from "../types";
-import { applyQuizAnswer, buildQuizNoteContent, computeQuizStats, parseQuizNote, sanitizeQuizFileName, setExamPassed } from "./quiz-notes";
-import type { KnowledgeStore } from "./store";
+import { applyQuizAnswer, buildQuizNoteContent, computeQuizStats, parseQuizCallout, parseQuizNote, sanitizeQuizFileName, setExamPassed, updateQuizSourcePath, upsertQuizCallout } from "./quiz-notes";
 
 /**
  * Bridges the pure quiz-notes.ts markdown logic with the vault: creates/
- * updates quiz notes under settings.archiveFolder, and uses the store's
- * small quizNotePaths index (source path -> quiz note path) to find the
- * right file instead of scanning the vault on every lookup.
+ * updates quiz notes under settings.archiveFolder. The source article's
+ * managed Quiz callout is the only index pointing back to its quiz note.
  */
 export class QuizNoteService {
   constructor(
     private app: App,
-    private settings: KnowFlowSettings,
-    private store: KnowledgeStore
+    private settings: KnowFlowSettings
   ) {}
 
   updateSettings(settings: KnowFlowSettings): void {
@@ -23,7 +20,8 @@ export class QuizNoteService {
 
   async saveQuiz(sourceFile: TFile, category: string, questions: QuizQuestion[]): Promise<string> {
     await this.ensureArchiveFolder();
-    const existingPath = this.store.getQuizNotePath(sourceFile.path);
+    const sourceContent = await this.app.vault.read(sourceFile);
+    const existingPath = parseQuizCallout(sourceContent);
     const quizPath = existingPath && await this.app.vault.adapter.exists(existingPath)
       ? existingPath
       : await this.resolveNewQuizPath(sourceFile.basename, new Date());
@@ -40,14 +38,15 @@ export class QuizNoteService {
       await this.app.vault.create(quizPath, content);
     }
 
-    if (existingPath !== quizPath) {
-      await this.store.setQuizNotePath(sourceFile.path, quizPath);
+    const nextSourceContent = upsertQuizCallout(sourceContent, quizPath);
+    if (nextSourceContent !== sourceContent) {
+      await this.app.vault.modify(sourceFile, nextSourceContent);
     }
     return quizPath;
   }
 
   async loadQuestions(notePath: string): Promise<{ quizPath: string; questions: QuizQuestion[] } | null> {
-    const quizPath = this.store.getQuizNotePath(notePath);
+    const quizPath = await this.resolveQuizPath(notePath);
     if (!quizPath) return null;
     const file = this.app.vault.getAbstractFileByPath(quizPath);
     if (!(file instanceof TFile)) return null;
@@ -58,12 +57,24 @@ export class QuizNoteService {
 
   async getStats(notePath: string): Promise<QuizStats> {
     const empty: QuizStats = { total: 0, answered: 0, accuracy: null, wrong: 0 };
-    const quizPath = this.store.getQuizNotePath(notePath);
+    const quizPath = await this.resolveQuizPath(notePath);
     if (!quizPath) return empty;
     const file = this.app.vault.getAbstractFileByPath(quizPath);
     if (!(file instanceof TFile)) return empty;
     const content = await this.app.vault.read(file);
     return computeQuizStats(content);
+  }
+
+  async updateSourcePath(newPath: string): Promise<void> {
+    const quizPath = await this.resolveQuizPath(newPath);
+    if (!quizPath) return;
+    await this.updateQuizSourceLink(quizPath, newPath);
+  }
+
+  async updateSourceFolder(newFolder: string): Promise<void> {
+    const prefix = `${newFolder}/`;
+    const files = this.app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(prefix));
+    await Promise.all(files.map((file) => this.updateSourcePath(file.path)));
   }
 
   /** `displayIndex` is 1-based, matching the question's position in the session. Returns whether the answer was correct. */
@@ -99,6 +110,23 @@ export class QuizNoteService {
     const folder = normalizePath(this.archiveFolder());
     if (await this.app.vault.adapter.exists(folder)) return;
     await this.app.vault.createFolder(folder);
+  }
+
+  private async updateQuizSourceLink(quizPath: string, sourcePath: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(quizPath);
+    if (!(file instanceof TFile)) return;
+    const content = await this.app.vault.read(file);
+    const next = updateQuizSourcePath(content, sourcePath);
+    if (next !== content) {
+      await this.app.vault.modify(file, next);
+    }
+  }
+
+  private async resolveQuizPath(sourcePath: string): Promise<string | null> {
+    const sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
+    if (!(sourceFile instanceof TFile)) return null;
+    const sourceContent = await this.app.vault.read(sourceFile);
+    return parseQuizCallout(sourceContent);
   }
 
   private archiveFolder(): string {

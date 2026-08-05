@@ -84,6 +84,30 @@ const text = {
   assert.equal(findSummaryCalloutEndIndex("## 正文标题\n\n这里是文章正文。\n"), null);
 }
 
+// Position does not matter: summary type + exact "AI 摘要" title identifies
+// the managed block. A different title remains ordinary user content.
+{
+  const laterCallout = `正文开头。\n\n${buildSummaryCallout(text)}\n`;
+  assert.deepEqual(parseSummaryCallout(laterCallout), text);
+
+  const differentTitle = "> [!summary]- AI 摘要补充\n> 用户自己的摘要。\n\n正文。\n";
+  assert.equal(parseSummaryCallout(differentTitle), null);
+  assert.equal(findSummaryCalloutEndIndex(differentTitle), null);
+}
+
+// Refreshing a managed summary must replace the matching callout while leaving
+// unrelated summary callouts elsewhere in the article untouched.
+{
+  const unrelated = "> [!summary]- 读者摘要\n> 用户自己的内容。";
+  const first = upsertSummaryCallout(`正文。\n\n${unrelated}\n`, text);
+  const refreshed = upsertSummaryCallout(first, { summary: "刷新后的摘要", reason: "刷新后的理由" });
+  const parsed = parseSummaryCallout(refreshed);
+  assert.equal(parsed.summary, "刷新后的摘要");
+  assert.equal(parsed.reason, "刷新后的理由");
+  assert.ok(refreshed.includes(unrelated), "refresh must preserve unrelated callouts");
+  assert.equal((refreshed.match(/> \[!summary\][+-]? AI 摘要$/gm) ?? []).length, 1, "managed AI summary must not duplicate");
+}
+
 // findSummaryCalloutEndIndex must point right after the callout's last
 // quoted line, so other note-writing code (mermaid-service.ts) can splice
 // content in immediately after the summary regardless of what follows it.

@@ -13,7 +13,7 @@ await esbuild.build({
   outdir: tempDir,
   platform: "node"
 });
-const { buildQuizNoteContent, parseQuizNote, computeQuizStats, applyQuizAnswer, setExamPassed, sanitizeQuizFileName } = await import(
+const { buildQuizCallout, buildQuizNoteContent, parseQuizCallout, parseQuizNote, computeQuizStats, applyQuizAnswer, setExamPassed, sanitizeQuizFileName, updateQuizSourcePath, upsertQuizCallout } = await import(
   pathToFileURL(join(tempDir, "quiz-notes.js")).href
 );
 
@@ -73,6 +73,31 @@ assert.ok(content.includes("- 难度：4/5"));
 // Multi-line explanations must collapse to a single line, matching the
 // "- 解析：..." single-line convention the Templater script parses.
 assert.ok(content.includes("- 解析：文章第二段说明 Scheduler 用生产者-消费者模式。 第二行解析，测试多行折叠为单行。"));
+
+// The source article owns the Quiz index as one managed callout at its end.
+{
+  const source = "---\n分类: AI\n---\n\n## 正文\n\n文章内容。\n";
+  const withQuiz = upsertQuizCallout(source, "Archives/2026-08-05_示例文章_Quiz.md");
+  assert.ok(withQuiz.endsWith(`${buildQuizCallout("Archives/2026-08-05_示例文章_Quiz.md")}\n`));
+  assert.equal(parseQuizCallout(withQuiz), "Archives/2026-08-05_示例文章_Quiz.md");
+
+  const refreshed = upsertQuizCallout(withQuiz, "Archives/2026-08-06_新试题_Quiz.md");
+  assert.equal(parseQuizCallout(refreshed), "Archives/2026-08-06_新试题_Quiz.md");
+  assert.equal((refreshed.match(/> \[!question\][+-]? Quiz$/gm) ?? []).length, 1);
+  assert.ok(!refreshed.includes("2026-08-05_示例文章_Quiz"));
+
+  const unrelated = "> [!question]- 复习问题\n> 用户自己的内容。\n";
+  assert.equal(parseQuizCallout(unrelated), null);
+}
+
+// Renaming the source article must update only the quiz note's 原文 wikilink.
+{
+  const renamed = updateQuizSourcePath(content, "Articles/AI/重命名后的文章.md");
+  assert.ok(renamed.includes('原文: "[[Articles/AI/重命名后的文章]]"'));
+  assert.ok(!renamed.includes('原文: "[[Articles/AI/示例文章]]"'));
+  assert.ok(renamed.includes("<!-- study-quiz:start -->"), "quiz body must survive source-link updates");
+  assert.equal(updateQuizSourcePath("# 普通笔记", "Articles/AI/新文章.md"), "# 普通笔记");
+}
 
 let parsed = parseQuizNote(content, notePath);
 assert.equal(parsed.length, 2);

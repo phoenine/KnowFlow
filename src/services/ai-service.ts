@@ -80,8 +80,7 @@ export class AiService {
     return {
       filePath,
       title,
-      ...normalized,
-      updatedAt: new Date().toISOString()
+      ...normalized
     };
   }
 
@@ -252,7 +251,7 @@ function assertModelConfig(config: AiModelConfig): void {
   }
 }
 
-function normalizeSummaryResponse(value: SummaryResponse, fallbackCategory: string): Omit<NoteSummary, "filePath" | "title" | "updatedAt"> {
+function normalizeSummaryResponse(value: SummaryResponse, fallbackCategory: string): Omit<NoteSummary, "filePath" | "title"> {
   const readingValue = Number.isInteger(value.readingValue)
     ? Math.min(5, Math.max(1, value.readingValue))
     : 3;

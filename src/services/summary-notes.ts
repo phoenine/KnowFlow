@@ -1,14 +1,9 @@
 import { splitFrontmatter } from "./frontmatter-rules";
 
-// The long-form AI summary lives in a collapsible callout inside the
-// note's own body instead of data.json (see StoredSummaryMeta in
-// types.ts). No start/end marker comments: the callout's own title line,
-// plus the "every line in the block is quoted" convention Obsidian itself
-// uses to delimit a callout, is already enough to find it again for an
-// idempotent regenerate — a marker comment would just be visible clutter
-// in a note that's meant to read like something a person wrote.
+// A managed AI summary is identified by its summary type and exact
+// "AI 摘要" title, regardless of where it appears in the article.
 const CALLOUT_TITLE = "> [!summary]- AI 摘要";
-const CALLOUT_TITLE_PATTERN = /^> \[!summary\]/;
+const CALLOUT_TITLE_PATTERN = /^> \[!summary\][+-]? AI 摘要\s*$/;
 
 export interface SummaryText {
   summary: string;
@@ -23,8 +18,8 @@ export function buildSummaryCallout(text: SummaryText): string {
 }
 
 /**
- * Inserts the callout right after frontmatter, or replaces the existing
- * one in place if the note was already summarized before.
+ * Inserts the managed callout right after frontmatter, or replaces the
+ * existing managed callout so refreshing never stacks AI summaries.
  */
 export function upsertSummaryCallout(content: string, text: SummaryText): string {
   const normalized = content.replace(/\r\n/g, "\n");
@@ -42,7 +37,7 @@ export function upsertSummaryCallout(content: string, text: SummaryText): string
   return `---\n${frontmatter}\n---\n\n${callout}\n\n${trimmedBody}`;
 }
 
-/** Extracts the summary/reason text back out of a note's markdown. */
+/** Extracts the managed summary/reason text back out of a note's markdown. */
 export function parseSummaryCallout(content: string): SummaryText | null {
   const normalized = content.replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
@@ -64,7 +59,7 @@ export function parseSummaryCallout(content: string): SummaryText | null {
  * Returns the character offset right after the summary callout block, so
  * other note-writing code (see mermaid-service.ts) can insert content
  * immediately following it instead of just appending to the end of the
- * file. Returns null if there's no summary callout yet.
+ * file. Returns null if there's no managed summary callout yet.
  */
 export function findSummaryCalloutEndIndex(content: string): number | null {
   const normalized = content.replace(/\r\n/g, "\n");

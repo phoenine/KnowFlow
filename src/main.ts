@@ -40,9 +40,8 @@ export default class KnowFlowPlugin extends Plugin {
     this.mermaid = new MermaidService(this.app);
     this.router = new PathRouter(this.app, this.settings);
     this.pipeline = new ClippingPipeline(this.app, this.settings, this.store, this.ai);
-    this.quizNotes = new QuizNoteService(this.app, this.settings, this.store);
+    this.quizNotes = new QuizNoteService(this.app, this.settings);
     this.summaryNotes = new SummaryNoteService(this.app);
-    await this.migrateLegacySummaryText();
 
     this.registerView(KNOWFLOW_VIEW_TYPE, (leaf) => new KnowFlowSidebarView(leaf, this));
 
@@ -97,15 +96,15 @@ export default class KnowFlowPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("file-open", () => this.refreshView()));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       if (file instanceof TFile) {
-        void this.store.migratePath(oldPath, file.path).then(() => this.refreshView());
+        void this.handleFileRename(oldPath, file.path);
         return;
       }
       if (file instanceof TFolder) {
         // Obsidian fires a single rename event for the folder itself; it does
         // not emit separate events for each descendant file, so any stored
-        // summaries/quizzes/learning state keyed by those old file paths must
+        // learning/pipeline state keyed by those old file paths must
         // be migrated here or they become permanently orphaned.
-        void this.store.migrateFolder(oldPath, file.path).then(() => this.refreshView());
+        void this.handleFolderRename(oldPath, file.path);
         return;
       }
       this.refreshView();
@@ -127,31 +126,28 @@ export default class KnowFlowPlugin extends Plugin {
     this.addSettingTab(new KnowFlowSettingTab(this.app, this));
   }
 
-  onunload(): void {
-    this.app.workspace.detachLeavesOfType(KNOWFLOW_VIEW_TYPE);
+  private async handleFileRename(oldPath: string, newPath: string): Promise<void> {
+    try {
+      await this.quizNotes.updateSourcePath(newPath);
+    } catch (error) {
+      new Notice(`KnowFlow: failed to update Quiz source link: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await this.store.migratePath(oldPath, newPath);
+    this.refreshView();
   }
 
-  /**
-   * One-time upgrade path: older plugin versions stored the full AI
-   * summary/reason text in data.json. That text now lives in each note's
-   * own callout instead (see summary-notes.ts), so any such text found by
-   * store.load() is written into its note here, rather than being
-   * silently dropped the first time this version runs.
-   */
-  private async migrateLegacySummaryText(): Promise<void> {
-    const legacy = this.store.takeLegacySummaryText();
-    const paths = Object.keys(legacy);
-    if (paths.length === 0) return;
-
-    for (const path of paths) {
-      const file = this.app.vault.getAbstractFileByPath(path);
-      if (file instanceof TFile) {
-        await this.summaryNotes.applySummary(file, legacy[path]);
-      }
+  private async handleFolderRename(oldPath: string, newPath: string): Promise<void> {
+    try {
+      await this.quizNotes.updateSourceFolder(newPath);
+    } catch (error) {
+      new Notice(`KnowFlow: failed to update Quiz source links: ${error instanceof Error ? error.message : String(error)}`);
     }
-    // Persist now so the stripped-down summaries (without the migrated
-    // text) are what's on disk, even if the user never saves anything else.
-    await this.store.save();
+    await this.store.migrateFolder(oldPath, newPath);
+    this.refreshView();
+  }
+
+  onunload(): void {
+    this.app.workspace.detachLeavesOfType(KNOWFLOW_VIEW_TYPE);
   }
 
   async loadSettings(): Promise<void> {

@@ -66,9 +66,8 @@ export function applyArticleFrontmatter(content: string, originalContent: string
 /**
  * Called the moment an AI summary is generated — before "整理"
  * (ClippingPipeline.process()) ever runs — so frontmatter becomes the
- * source of truth for these four fields immediately. data.json never
- * caches them, not even transiently (see StoredSummaryMeta in types.ts),
- * so this is the only place that writes them. Deliberately narrow: it only
+ * source of truth for these four fields immediately. Deliberately narrow:
+ * it only
  * touches 简要描述/阅读价值/分类/tags, leaving 创建日期/学习日期/学习状态/状态/
  * 文章作者 and the body completely alone — that's applyArticleFrontmatter's
  * job instead.
