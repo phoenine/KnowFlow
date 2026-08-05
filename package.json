@@ -7,7 +7,7 @@
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
     "install:dev": "npm run build && node scripts/install-dev.mjs",
-    "test": "npm run build && node scripts/test-cleanup.mjs && node scripts/test-store.mjs && node scripts/test-frontmatter-edge-cases.mjs && node scripts/test-quiz-notes.mjs && node scripts/test-summary-notes.mjs && node scripts/test-mermaid-service.mjs",
+    "test": "npm run build && node scripts/test-cleanup.mjs && node scripts/test-formatting-candidates.mjs && node scripts/test-store.mjs && node scripts/test-frontmatter-edge-cases.mjs && node scripts/test-quiz-notes.mjs && node scripts/test-summary-notes.mjs && node scripts/test-mermaid-service.mjs",
     "typecheck": "tsc -noEmit -skipLibCheck"
   },
   "keywords": [

@@ -13,7 +13,9 @@ await esbuild.build({
   outdir: tempDir,
   platform: "node"
 });
-const { cleanupPromotionalNoise } = await import(pathToFileURL(join(tempDir, "cleanup-rules.js")).href);
+const { cleanupPromotionalNoise, removeCodeWatermarkLines } = await import(
+  pathToFileURL(join(tempDir, "cleanup-rules.js")).href
+);
 const { applyArticleFrontmatter, applySummaryFrontmatter, updateFrontmatterCategory } = await import(
   pathToFileURL(join(tempDir, "frontmatter-rules.js")).href
 );
@@ -44,8 +46,14 @@ const articleWithFooter = [
 
 const cleanedFooter = cleanupPromotionalNoise(articleWithFooter);
 assert.ok(cleanedFooter.includes("正文段落 30"));
-assert.ok(!cleanedFooter.includes("推荐阅读"));
-assert.ok(!cleanedFooter.includes("二维码"));
+assert.ok(cleanedFooter.includes("推荐阅读"), "footer headings and surrounding content must not be truncated");
+assert.ok(cleanedFooter.includes("![二维码](assets/qr.png)"), "non-exact content must be preserved");
+assert.ok(!cleanedFooter.includes("扫码关注公众号"));
+assert.ok(!cleanedFooter.includes("阅读原文"));
+assert.equal(cleanupPromotionalNoise("二维码技术原理\n广告行业分析"), "二维码技术原理\n广告行业分析");
+assert.equal(cleanupPromotionalNoise("复制代码\n正文"), "复制代码\n正文", "code watermarks are not advertising");
+assert.equal(removeCodeWatermarkLines("复制代码\nconst value = 1;"), "const value = 1;");
+assert.equal(removeCodeWatermarkLines("这里讨论“复制代码”的功能"), "这里讨论“复制代码”的功能");
 
 const template = [
   "---",
@@ -103,6 +111,12 @@ assert.ok(frontmatterUpdated.includes("学习日期:\n"));
 assert.ok(frontmatterUpdated.includes("学习状态:\n  - 学习中"));
 assert.ok(frontmatterUpdated.includes("状态: true"));
 assert.ok(frontmatterUpdated.includes("\n正文\n"));
+
+const preservedH1 = applyArticleFrontmatter("# 原始一级标题\n\n正文", originalWithComplexFrontmatter, template, {
+  title: "标题",
+  today: "2026-08-04"
+});
+assert.ok(preservedH1.includes("\n# 原始一级标题\n"), "article frontmatter updates must not rewrite body headings");
 
 const movedCategory = updateFrontmatterCategory(frontmatterUpdated, "知识积累");
 assert.ok(movedCategory.includes("分类: 知识积累"));

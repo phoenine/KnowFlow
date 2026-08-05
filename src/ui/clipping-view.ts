@@ -7,11 +7,10 @@ import { renderBrandShell } from "./shell";
 const CLIPPING_PIPELINE_STEPS = [
   "清理残留格式",
   "整理 Markdown 样式",
-  "编辑章节结构",
+  "整理作者信息",
   "格式化代码块",
-  "转换公式",
-  "去除广告、二维码和页脚",
-  "AI 优化 Markdown",
+  "去除明确广告残留",
+  "AI 判断标题和代码",
   "补全 Frontmatter"
 ];
 

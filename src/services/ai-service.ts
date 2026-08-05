@@ -1,6 +1,7 @@
 import { requestUrl } from "obsidian";
 import type { AiModelConfig, ChatResult, KnowFlowMode, KnowFlowSettings, NoteSummary, QuizQuestion } from "../types";
 import { ARTICLE_CATEGORIES } from "./clipping-pipeline";
+import type { FormattingCandidate, FormattingDecision } from "./formatting-candidates";
 
 interface SummaryResponse {
   briefDescription: string;
@@ -20,6 +21,10 @@ interface QuizResponse {
     explanation: string;
     difficulty: number;
   }>;
+}
+
+interface FormattingResponse {
+  decisions: FormattingDecision[];
 }
 
 const REQUEST_TIMEOUT_MS = 60000;
@@ -153,29 +158,46 @@ export class AiService {
     return normalizeQuizResponse(payload, filePath, Math.max(1, Math.min(12, count)));
   }
 
-  async polishClippingMarkdown(title: string, content: string): Promise<string> {
-    const polished = await this.requestText(this.settings.summaryModel, [
+  async analyzeFormattingCandidates(title: string, candidates: FormattingCandidate[]): Promise<FormattingDecision[]> {
+    if (candidates.length === 0) return [];
+    const payload = await this.requestJson<FormattingResponse>(this.settings.summaryModel, [
       {
         role: "system",
         content: [
-          "你是 KnowFlow 的 Obsidian Markdown 整理器。",
-          "任务是修正 Web Clipper 产生的生硬 Markdown 格式，不做摘要、不扩写、不删减正文观点。",
-          "只输出整理后的 Markdown 正文，不要输出解释、代码围栏或 Frontmatter。",
-          "保留原文语义、链接、图片、引用和代码块；代码块内容不要改写。",
-          "修复孤立的加粗符号、错误标题层级、列表编号、过多空行、明显的广告按钮残留。",
-          "标题层级从 ## 开始；不要生成 # 一级标题。",
-          "不要把普通段落强行改成标题；不确定时保留为段落。"
+          "你是 KnowFlow 的 Obsidian Markdown 格式候选分类器。",
+          "只判断候选是否为标题或代码，不改写、不补充、不删除候选内容。",
+          "possible-heading 只能返回 keep 或 heading；heading 的 level 只能为 2、3、4。",
+          "possible-code 只能返回 keep 或 wrap-code；如果是代码，返回准确 language。",
+          "fenced-code 只能返回 keep 或 set-code-language；仅判断代码围栏语言。",
+          "普通短段落不是标题，不确定时返回 keep。",
+          "必须为每个候选返回一条 decision，并输出严格 JSON。"
         ].join("\n")
       },
       {
         role: "user",
         content: JSON.stringify({
           title,
-          markdown: stripFrontmatter(content).slice(0, 26000)
+          candidates: candidates.map(({ id, type, content, before, after }) => ({
+            id,
+            type,
+            content,
+            before,
+            after
+          })),
+          requiredJsonShape: {
+            decisions: [
+              {
+                id: "候选 id",
+                action: "keep | heading | wrap-code | set-code-language",
+                level: "仅 heading：2 | 3 | 4",
+                language: "仅代码操作：语言标识"
+              }
+            ]
+          }
         })
       }
     ]);
-    return normalizePolishedMarkdown(polished);
+    return normalizeFormattingDecisions(payload, candidates);
   }
 
   private async requestJson<T>(config: AiModelConfig, messages: ChatMessage[]): Promise<T> {
@@ -292,12 +314,34 @@ function deriveBriefDescription(summary: string): string {
     .slice(0, 160) || "AI 未返回简要描述。";
 }
 
-function normalizePolishedMarkdown(value: string): string {
-  const unfenced = value
-    .trim()
-    .replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/i, "$1")
-    .trim();
-  return stripFrontmatter(unfenced).trim();
+function normalizeFormattingDecisions(
+  value: FormattingResponse,
+  candidates: FormattingCandidate[]
+): FormattingDecision[] {
+  const candidateTypes = new Map(candidates.map((candidate) => [candidate.id, candidate.type]));
+  const decisions = Array.isArray(value.decisions) ? value.decisions : [];
+  return decisions.flatMap((decision): FormattingDecision[] => {
+    const type = candidateTypes.get(decision.id);
+    if (!type || typeof decision.action !== "string") return [];
+    if (decision.action === "keep") return [{ id: decision.id, action: "keep" }];
+    if (type === "possible-heading" && decision.action === "heading") {
+      const level = decision.level === 3 || decision.level === 4 ? decision.level : 2;
+      return [{ id: decision.id, action: "heading", level }];
+    }
+    if (type === "possible-code" && decision.action === "wrap-code") {
+      return [{ id: decision.id, action: "wrap-code", language: normalizeLanguageName(decision.language) }];
+    }
+    if (type === "fenced-code" && decision.action === "set-code-language") {
+      return [{ id: decision.id, action: "set-code-language", language: normalizeLanguageName(decision.language) }];
+    }
+    return [];
+  });
+}
+
+function normalizeLanguageName(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const language = value.trim().toLowerCase();
+  return /^[a-z0-9_+-]{1,24}$/.test(language) ? language : "";
 }
 
 function parseJsonResponse<T>(text: string): T {

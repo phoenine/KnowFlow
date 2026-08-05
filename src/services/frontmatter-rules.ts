@@ -60,7 +60,7 @@ export function applyArticleFrontmatter(content: string, originalContent: string
     }
   }
 
-  return `---\n${nextFrontmatter.trim()}\n---\n\n${body.replace(/^#\s+/gm, "## ")}\n`;
+  return `---\n${nextFrontmatter.trim()}\n---\n\n${body}\n`;
 }
 
 /**
