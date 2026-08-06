@@ -8,7 +8,7 @@ import { renderArticleDetailView } from "./article-detail-view";
 import { renderArticlesOverviewView } from "./articles-overview-view";
 import { renderChatComposer } from "./chat-composer";
 import { renderChatHistoryPopover } from "./chat-history-view";
-import { renderClippingView } from "./clipping-view";
+import { renderClippingView, updateStreamingReasoning } from "./clipping-view";
 import { applyActionLayout, button, formatDate, iconButton, row, section, setStyles, text } from "./dom";
 import { renderQuizTestView } from "./quiz-test-view";
 import { renderShell } from "./shell";
@@ -23,7 +23,8 @@ export class KnowFlowSidebarView extends ItemView {
   private streamingAnswerEl: HTMLElement | null = null;
   private streamingReasoningEl: HTMLElement | null = null;
   private streamingSummaryContentEl: HTMLElement | null = null;
-  private streamingSummaryReasoningEl: HTMLElement | null = null;
+  private streamingSummaryReasoningHistoryEl: HTMLElement | null = null;
+  private streamingSummaryReasoningLatestEl: HTMLElement | null = null;
   private quizSession: QuizSession | null = null;
   private pendingSummaries = new Set<string>();
   private summaryErrors = new Map<string, string>();
@@ -166,7 +167,8 @@ export class KnowFlowSidebarView extends ItemView {
     });
 
     this.streamingSummaryContentEl = root.querySelector(".kf-streaming-text");
-    this.streamingSummaryReasoningEl = root.querySelector(".kf-streaming-reasoning");
+    this.streamingSummaryReasoningHistoryEl = root.querySelector(".kf-streaming-reasoning-history");
+    this.streamingSummaryReasoningLatestEl = root.querySelector(".kf-streaming-reasoning-latest");
     this.renderComposer(root, context, file.basename, file);
   }
 
@@ -192,12 +194,18 @@ export class KnowFlowSidebarView extends ItemView {
           this.streamingSummaryReasonings.set(file.path, reasoning);
           if (this.plugin.router.getContext().activeFile?.path !== file.path) return;
           const needsContentEl = Boolean(visible) && !this.streamingSummaryContentEl;
-          const needsReasoningEl = Boolean(reasoning) && !this.streamingSummaryReasoningEl;
+          const needsReasoningEl = !visible && Boolean(reasoning) && !this.streamingSummaryReasoningLatestEl;
           if (needsContentEl || needsReasoningEl) {
             this.render();
             return;
           }
-          if (this.streamingSummaryReasoningEl) this.streamingSummaryReasoningEl.textContent = reasoning;
+          if (this.streamingSummaryReasoningHistoryEl && this.streamingSummaryReasoningLatestEl) {
+            updateStreamingReasoning(
+              this.streamingSummaryReasoningHistoryEl,
+              this.streamingSummaryReasoningLatestEl,
+              reasoning
+            );
+          }
           if (this.streamingSummaryContentEl) this.streamingSummaryContentEl.textContent = visible;
         }
       );
@@ -227,7 +235,8 @@ export class KnowFlowSidebarView extends ItemView {
     this.streamingSummaryTexts.delete(filePath);
     this.streamingSummaryReasonings.delete(filePath);
     this.streamingSummaryContentEl = null;
-    this.streamingSummaryReasoningEl = null;
+    this.streamingSummaryReasoningHistoryEl = null;
+    this.streamingSummaryReasoningLatestEl = null;
   }
 
   private renderArticlesOverview(root: HTMLElement, context: ViewContext): void {

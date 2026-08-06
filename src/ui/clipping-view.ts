@@ -79,40 +79,38 @@ function renderSummaryCard(content: HTMLElement, props: ClippingViewProps): void
   }
   if (props.summary && !props.summaryPending) {
     props.renderMarkdownSummary(summary, `${props.summary.summary}${props.summary.reason ? `\n\n> ${props.summary.reason}` : ""}`);
-  } else if (props.summaryPending && (props.streamingText || props.streamingReasoning)) {
-    // 流式用纯文本，避免 MarkdownRenderer 每帧重绘；reasoning 默认折叠，可选手动展开。
-    if (props.streamingReasoning) {
-      const details = summary.createEl("details", { cls: "kf-streaming-reasoning-wrap" });
-      details.open = false;
-      setStyles(details, { marginBottom: "8px" });
-      const label = details.createEl("summary", { text: "思考过程" });
-      setStyles(label, { color: "var(--text-muted)", cursor: "pointer", fontSize: "12px" });
-      const reasoningEl = details.createDiv({ cls: "kf-streaming-reasoning" });
-      setStyles(reasoningEl, {
-        color: "var(--text-muted)",
-        fontSize: "12px",
-        lineHeight: "1.5",
-        marginTop: "7px",
-        maxHeight: "220px",
-        overflow: "auto",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word"
-      });
-      reasoningEl.setText(props.streamingReasoning);
-    }
-    if (props.streamingText) {
-      const streamEl = summary.createDiv({ cls: "kf-streaming-text" });
-      setStyles(streamEl, {
-        color: "var(--text-muted)",
-        fontSize: "13px",
-        lineHeight: "1.5",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word"
-      });
-      streamEl.setText(props.streamingText);
-    } else {
-      text(summary, "正在生成摘要…", "kf-muted");
-    }
+  } else if (props.summaryPending && props.streamingText) {
+    // 正式内容开始后完全替换 reasoning，避免两个信息层争夺注意力。
+    const streamEl = summary.createDiv({ cls: "kf-streaming-text" });
+    setStyles(streamEl, {
+      color: "var(--text-muted)",
+      fontSize: "13px",
+      lineHeight: "1.5",
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word"
+    });
+    streamEl.setText(props.streamingText);
+  } else if (props.summaryPending && props.streamingReasoning) {
+    const viewport = summary.createDiv({ cls: "kf-streaming-reasoning-viewport" });
+    setStyles(viewport, {
+      height: "90px",
+      maskImage: "linear-gradient(to bottom, transparent 0%, black 30%, black 100%)",
+      overflow: "hidden",
+      position: "relative"
+    });
+    const flow = viewport.createDiv({ cls: "kf-streaming-reasoning-flow" });
+    setStyles(flow, {
+      fontSize: "12px",
+      lineHeight: "1.5",
+      minHeight: "100%",
+      overflowWrap: "anywhere",
+      whiteSpace: "pre-wrap"
+    });
+    const historyEl = flow.createSpan({ cls: "kf-streaming-reasoning-history" });
+    setStyles(historyEl, { color: "var(--text-muted)" });
+    const latestEl = flow.createSpan({ cls: "kf-streaming-reasoning-latest" });
+    setStyles(latestEl, { color: "var(--text-normal)", fontWeight: "500" });
+    updateStreamingReasoning(historyEl, latestEl, props.streamingReasoning);
   } else {
     text(
       summary,
@@ -132,6 +130,37 @@ function renderSummaryCard(content: HTMLElement, props: ClippingViewProps): void
       }, true);
     }
   }
+}
+
+export function updateStreamingReasoning(
+  historyEl: HTMLElement,
+  latestEl: HTMLElement,
+  reasoning: string
+): void {
+  const { history, latest } = splitReasoningFocus(reasoning);
+  historyEl.setText(history);
+  latestEl.setText(latest);
+  const viewport = latestEl.closest<HTMLElement>(".kf-streaming-reasoning-viewport");
+  window.requestAnimationFrame(() => {
+    if (viewport?.isConnected) viewport.scrollTop = viewport.scrollHeight;
+  });
+}
+
+function splitReasoningFocus(reasoning: string): { history: string; latest: string } {
+  const focusLength = 120;
+  if (reasoning.length <= focusLength) return { history: "", latest: reasoning };
+
+  // 优先聚焦当前段落；段落过长时保留最后一小段，避免整屏一直保持高亮。
+  const lastBreak = reasoning.lastIndexOf("\n", reasoning.length - 2);
+  let splitAt = lastBreak >= reasoning.length - focusLength ? lastBreak + 1 : reasoning.length - focusLength;
+  const nextWhitespace = reasoning.slice(splitAt, splitAt + 24).search(/\s/);
+  if (lastBreak < reasoning.length - focusLength && nextWhitespace >= 0) {
+    splitAt += nextWhitespace + 1;
+  }
+  return {
+    history: reasoning.slice(0, splitAt),
+    latest: reasoning.slice(splitAt)
+  };
 }
 
 function renderPipelineCard(content: HTMLElement, props: ClippingViewProps): void {
