@@ -6,10 +6,10 @@ import { renderBrandShell } from "./shell";
 
 const CLIPPING_PIPELINE_STEPS = [
   "整理 Markdown 样式",
-  "AI 判断标题",
   "格式化代码块",
   "AI 判断未围栏代码",
   "AI 判断代码语言",
+  "AI 判断标题",
   "英文翻译（可选）",
   "补全 Frontmatter"
 ];

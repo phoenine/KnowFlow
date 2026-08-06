@@ -304,7 +304,7 @@ export class AiService {
     for (let index = 0; index < batches.length; index += 1) {
       const batch = batches[index];
       try {
-        const payload = await this.requestJson<FormattingResponse>(this.settings.summaryModel, [
+        const payload = await this.requestJson<FormattingResponse>(this.settings.pipelineModel, [
           {
             role: "system",
             content: [
@@ -343,7 +343,7 @@ export class AiService {
     for (let index = 0; index < batches.length; index += 1) {
       const batch = batches[index];
       try {
-        const payload = await this.requestJson<FormattingResponse>(this.settings.summaryModel, [
+        const payload = await this.requestJson<FormattingResponse>(this.settings.pipelineModel, [
           {
             role: "system",
             content: [
@@ -381,7 +381,7 @@ export class AiService {
     for (let index = 0; index < batches.length; index += 1) {
       const batch = batches[index];
       try {
-        const payload = await this.requestJson<FormattingResponse>(this.settings.summaryModel, [
+        const payload = await this.requestJson<FormattingResponse>(this.settings.pipelineModel, [
           {
             role: "system",
             content: [
@@ -419,7 +419,7 @@ export class AiService {
     for (let index = 0; index < batches.length; index += 1) {
       const batch = batches[index];
       try {
-        const payload = await this.requestJson<TranslationResponse>(this.settings.summaryModel, [
+        const payload = await this.requestJson<TranslationResponse>(this.settings.pipelineModel, [
           {
             role: "system",
             content: [

@@ -202,6 +202,7 @@ function normalizeSettings(savedSettings: unknown): KnowFlowSettings {
     ...DEFAULT_SETTINGS,
     ...saved,
     summaryModel: normalizeModelConfig(saved.summaryModel, DEFAULT_SETTINGS.summaryModel, legacyRuntime, legacyBaseUrl, legacyApiKey),
+    pipelineModel: normalizeModelConfig(saved.pipelineModel, DEFAULT_SETTINGS.pipelineModel, legacyRuntime, legacyBaseUrl, legacyApiKey),
     chatModel: normalizeModelConfig(saved.chatModel, DEFAULT_SETTINGS.chatModel, legacyRuntime, legacyBaseUrl, legacyApiKey),
     quizModel: normalizeModelConfig(saved.quizModel, DEFAULT_SETTINGS.quizModel, legacyRuntime, legacyBaseUrl, legacyApiKey)
   };

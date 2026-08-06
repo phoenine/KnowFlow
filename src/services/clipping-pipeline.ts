@@ -62,24 +62,16 @@ export class ClippingPipeline {
       let formatted = this.stripFrontmatterBody(original);
       this.assertReadableBody(formatted);
 
-      // Phase 1: Block Parser + 规则清理
+      // Phase 1: 规则清理
       formatted = normalizeOrphanBoldTriplet(formatted);
       formatted = this.organizeMarkdownStyle(formatted);
       const blocks = parseBlocks(formatted);
 
-      // Phase 2: 标题 LLM（只从 paragraph 块收集候选）
-      await report("AI 判断标题");
-      const headingCandidates = collectHeadingCandidates(formatted);
-      if (headingCandidates.length > 0) {
-        const headingDecisions = await this.ai.analyzeHeadingCandidates(title, headingCandidates);
-        formatted = applyFormattingDecisions(formatted, headingCandidates, headingDecisions);
-      }
-
-      // Phase 3: 代码格式化（规则 + HIGH 置信直接包围栏）
+      // Phase 2: 代码格式化（规则，先跑，把代码块结构定下来）
       await report("格式化代码块");
       formatted = this.formatCodeBlocks(formatted);
 
-      // Phase 4: 代码 LLM（MEDIUM + fenced-code，并行）
+      // Phase 3: 代码 LLM（MEDIUM + fenced-code，并行）
       const codeResult = collectCodeCandidates(formatted);
       const hasPossibleCode = codeResult.possibleCode.length > 0;
       const hasFencedCode = codeResult.fencedCode.length > 0;
@@ -106,8 +98,16 @@ export class ClippingPipeline {
         await report("AI 判断代码语言");
       }
 
-      // Phase 5: HIGH 置信度代码直接包围栏（无 LLM）
+      // Phase 4: HIGH 置信度代码直接包围栏（无 LLM，基于 Block Parser 输出）
       formatted = this.applyHighConfidenceCodeWraps(formatted, blocks);
+
+      // Phase 5: 标题 LLM（放在代码整理之后，候选质量更高）
+      await report("AI 判断标题");
+      const headingCandidates = collectHeadingCandidates(formatted);
+      if (headingCandidates.length > 0) {
+        const headingDecisions = await this.ai.analyzeHeadingCandidates(title, headingCandidates);
+        formatted = applyFormattingDecisions(formatted, headingCandidates, headingDecisions);
+      }
 
       // Phase 6: 英文翻译
       await report("英文翻译（可选）");

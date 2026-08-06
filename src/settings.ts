@@ -3,7 +3,7 @@ import type KnowFlowPlugin from "./main";
 import { withTimeout } from "./services/ai-service";
 import type { AiModelConfig, AiRuntime, KnowFlowSettings } from "./types";
 
-type ModelConfigKey = "summaryModel" | "chatModel" | "quizModel";
+type ModelConfigKey = "summaryModel" | "pipelineModel" | "chatModel" | "quizModel";
 type SettingsTabKey = "basic" | "ai-models" | "pipeline" | "learning" | "data";
 
 const DEFAULT_MODEL_CONFIG: AiModelConfig = {
@@ -28,6 +28,7 @@ export const DEFAULT_SETTINGS: KnowFlowSettings = {
   chatConversationFolder: "copilot-conversations",
   templatePath: "Template/article.md",
   summaryModel: { ...DEFAULT_MODEL_CONFIG },
+  pipelineModel: { ...DEFAULT_MODEL_CONFIG },
   chatModel: { ...DEFAULT_MODEL_CONFIG },
   quizModel: { ...DEFAULT_MODEL_CONFIG },
   confirmBeforeWrite: false,
@@ -176,7 +177,8 @@ export class KnowFlowSettingTab extends PluginSettingTab {
   private displayAiModels(containerEl: HTMLElement): void {
     const ai = this.createGroup(containerEl, "AI 模型", this.aiSummary(), true);
 
-    this.createModelEntry(ai, "Summary model", "Used for Clipping pipeline Markdown polishing, summary, reading value and classification.", "summaryModel");
+    this.createModelEntry(ai, "Summary model", "AI Summary: generates article summary, reading value, classification and knowledge map.", "summaryModel");
+    this.createModelEntry(ai, "Pipeline model", "Clipping Pipeline: heading detection, code block recognition and language classification.", "pipelineModel");
     this.createModelEntry(ai, "Chat model", "Used by the sidebar chat composer.", "chatModel");
     this.createModelEntry(ai, "Quiz model", "Used for database-backed quiz generation.", "quizModel");
 
@@ -393,8 +395,8 @@ export class KnowFlowSettingTab extends PluginSettingTab {
   }
 
   private aiSummary(): string {
-    const { summaryModel, chatModel, quizModel } = this.plugin.settings;
-    return `S ${summaryModel.model} · C ${chatModel.model} · Q ${quizModel.model}`;
+    const { summaryModel, pipelineModel, chatModel, quizModel } = this.plugin.settings;
+    return `S ${summaryModel.model} · P ${pipelineModel.model} · C ${chatModel.model} · Q ${quizModel.model}`;
   }
 
   private async validateBasicPaths(): Promise<void> {

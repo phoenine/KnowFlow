@@ -27,6 +27,7 @@ export interface KnowFlowSettings {
   chatConversationFolder: string;
   templatePath: string;
   summaryModel: AiModelConfig;
+  pipelineModel: AiModelConfig;
   chatModel: AiModelConfig;
   quizModel: AiModelConfig;
   autoCreateCategoryFolders: boolean;
