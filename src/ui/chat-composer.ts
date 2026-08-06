@@ -203,9 +203,9 @@ export function renderChatComposer(root: HTMLElement, props: ChatComposerProps):
 }
 
 function formatTokenCount(value: number): string {
-  if (value < 1000) return String(value);
+  if (value < 1000) return `${value} tokens`;
   const rounded = value >= 10000 ? Math.round(value / 1000) : Math.round(value / 100) / 10;
-  return `${rounded}k`;
+  return `${rounded}k tokens`;
 }
 
 export function applyChipStyle(el: HTMLElement): void {

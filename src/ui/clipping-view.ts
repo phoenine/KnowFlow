@@ -112,6 +112,11 @@ function renderSummaryCard(content: HTMLElement, props: ClippingViewProps): void
     setStyles(latestEl, { color: "var(--text-normal)", fontWeight: "500" });
     updateStreamingReasoning(historyEl, latestEl, props.streamingReasoning);
     // 推理过程中仍显示提示文案和 token 预估
+    const separator = summary.createDiv({ cls: "kf-reasoning-separator" });
+    setStyles(separator, {
+      borderTop: "1px solid var(--background-modifier-border)",
+      margin: "8px 0"
+    });
     text(summary, "正在根据当前 Clipping 生成摘要、阅读价值和分类建议。", "kf-muted");
     text(summary, `预计消耗：约 ${props.analysisCost}k tokens`, "kf-token-estimate");
   } else {
