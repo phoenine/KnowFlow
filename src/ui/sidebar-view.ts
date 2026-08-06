@@ -1,11 +1,13 @@
 import { ItemView, MarkdownRenderer, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import type KnowFlowPlugin from "../main";
 import { ARTICLE_CATEGORIES } from "../services/clipping-pipeline";
+import { insertBelowCursor } from "../services/editor-bridge";
 import type { SummaryText } from "../services/summary-notes";
-import { KNOWFLOW_VIEW_TYPE, type ArticleStats, type ChatResult, type NoteSummary, type PipelineUiState, type QuizSession, type QuizStats, type ViewContext } from "../types";
+import { KNOWFLOW_VIEW_TYPE, type ArticleStats, type ChatMessage, type ChatThread, type ChatUsage, type NoteSummary, type PipelineUiState, type QuizSession, type QuizStats, type ViewContext } from "../types";
 import { renderArticleDetailView } from "./article-detail-view";
 import { renderArticlesOverviewView } from "./articles-overview-view";
-import { renderChatComposer, applyChipStyle } from "./chat-composer";
+import { renderChatComposer } from "./chat-composer";
+import { renderChatHistoryPopover } from "./chat-history-view";
 import { renderClippingView } from "./clipping-view";
 import { applyActionLayout, button, formatDate, iconButton, row, section, setStyles, text } from "./dom";
 import { renderQuizTestView } from "./quiz-test-view";
@@ -17,7 +19,9 @@ interface CachedSummaryText {
 }
 
 export class KnowFlowSidebarView extends ItemView {
-  private chatResult: ChatResult | null = null;
+  private activeChatThread: ChatThread | null = null;
+  private streamingAnswerEl: HTMLElement | null = null;
+  private streamingReasoningEl: HTMLElement | null = null;
   private quizSession: QuizSession | null = null;
   private pendingSummaries = new Set<string>();
   private summaryErrors = new Map<string, string>();
@@ -31,6 +35,7 @@ export class KnowFlowSidebarView extends ItemView {
   private quizStatsPending = new Set<string>();
   private summaryTextCache = new WeakMap<TFile, CachedSummaryText>();
   private summaryTextLoads = new WeakMap<TFile, Promise<SummaryText | null>>();
+  private streamingSummaryTexts = new Map<string, string>();
   private clippingSummaryScanPending = false;
 
   constructor(
@@ -73,12 +78,13 @@ export class KnowFlowSidebarView extends ItemView {
       display: "flex",
       flexDirection: "column",
       fontSize: "13px",
-      height: "100%"
+      height: "100%",
+      position: "relative"
     });
     this.renderedContextKey = nextContextKey;
 
-    if (this.chatResult) {
-      this.renderChatResult(root, this.chatResult);
+    if (this.activeChatThread) {
+      this.renderChatThread(root, this.activeChatThread);
       this.restoreScroll(currentScroll, shouldRestoreScroll);
       return;
     }
@@ -119,6 +125,7 @@ export class KnowFlowSidebarView extends ItemView {
     const summary = this.getSummaryViewModel(file);
     const summaryPending = this.pendingSummaries.has(file.path);
     const summaryError = this.summaryErrors.get(file.path);
+    const streamingText = this.streamingSummaryTexts.get(file.path);
     const analysisCost = estimateClippingAnalysisTokens(file);
     const pipelineState = this.pipelineStates.get(file.path);
     const persistedPipeline = this.plugin.store.getPipelineStatus(file.path);
@@ -129,6 +136,7 @@ export class KnowFlowSidebarView extends ItemView {
       summary,
       summaryPending,
       summaryError,
+      streamingText,
       analysisCost,
       pipelineState,
       persistedPipeline,
@@ -158,12 +166,28 @@ export class KnowFlowSidebarView extends ItemView {
     if (!force && await this.readSummaryText(file)) return;
     this.pendingSummaries.add(file.path);
     this.summaryErrors.delete(file.path);
+    this.streamingSummaryTexts.delete(file.path);
     if (this.plugin.router.getContext().activeFile?.path === file.path) {
       this.render();
     }
+    const scheduleRender = () => debounceByKey(file.path, () => {
+      if (this.plugin.router.getContext().activeFile?.path === file.path) {
+        this.render();
+      }
+    }, 120);
     try {
       const content = await this.app.vault.read(file);
-      const summary = await this.plugin.ai.summarize(file.path, file.basename, content, this.plugin.settings.defaultArticleCategory);
+      const summary = await this.plugin.ai.summarizeStream(
+        file.path,
+        file.basename,
+        content,
+        this.plugin.settings.defaultArticleCategory,
+        (fullText) => {
+          this.streamingSummaryTexts.set(file.path, extractVisibleText(fullText));
+          scheduleRender();
+        }
+      );
+      this.streamingSummaryTexts.delete(file.path);
       await this.plugin.summaryNotes.applySummary(
         file,
         { summary: summary.summary, reason: summary.reason },
@@ -181,6 +205,7 @@ export class KnowFlowSidebarView extends ItemView {
       this.summaryErrors.set(file.path, message);
       new Notice(`KnowFlow summary failed: ${message}`, 8000);
     } finally {
+      this.streamingSummaryTexts.delete(file.path);
       this.pendingSummaries.delete(file.path);
       if (this.plugin.router.getContext().activeFile?.path === file.path) {
         this.render();
@@ -274,105 +299,155 @@ export class KnowFlowSidebarView extends ItemView {
     button(actions, "刷新", () => this.render(), true);
   }
 
-  private renderChatResult(root: HTMLElement, result: ChatResult): void {
-    const content = renderShell(root, "Chat Result", "Ready", () => {
-      this.chatResult = null;
+  private renderChatThread(root: HTMLElement, thread: ChatThread): void {
+    const content = renderShell(root, "", "Ready", () => {
+      this.activeChatThread = null;
       this.render();
     });
+    this.streamingAnswerEl = null;
+    this.streamingReasoningEl = null;
 
-    const question = section(content, "kf-question");
-    setStyles(question, { backgroundColor: "var(--background-secondary)" });
-    const chip = question.createDiv({ cls: "kf-context-chip" });
-    applyChipStyle(chip);
-    chip.createSpan({ text: result.contextLabel });
-    text(question, result.question, "kf-question-text");
-    const footer = row(question);
-    setStyles(footer, { justifyContent: "space-between" });
-    text(footer, formatDate(result.createdAt), "kf-muted");
-    const tools = footer.createDiv({ cls: "kf-card-tools" });
-    setStyles(tools, {
-      display: "flex",
-      gap: "8px",
-      marginLeft: "auto"
-    });
-    iconButton(tools, "Copy", "copy", () => navigator.clipboard.writeText(result.question));
-    iconButton(tools, "Edit", "pencil", () => new Notice("Edit question comes next."));
-    iconButton(tools, "Delete", "trash-2", () => {
-      this.chatResult = null;
-      this.render();
-    });
-
-    const thinking = section(content, "kf-thinking");
-    setStyles(thinking, { backgroundColor: "var(--background-secondary)" });
-    text(thinking, "▸ Thought for a while", "kf-thinking-text");
-
-    const answer = content.createDiv({ cls: "kf-answer" });
-    setStyles(answer, {
-      display: "flex",
-      flexDirection: "column",
-      gap: "14px",
-      padding: "10px 0"
-    });
-    result.answer.split("\n\n").forEach((paragraph) => {
-      text(answer, paragraph, "kf-answer-paragraph");
-    });
-
-    const actions = row(content, "kf-actions");
-    applyActionLayout(actions);
-    button(actions, "复制", () => navigator.clipboard.writeText(result.answer));
-    button(actions, "重新生成", () => this.submitChat(result.question));
-    button(actions, "存为摘要", async () => {
-      if (!result.filePath) return;
-      const target = this.app.vault.getAbstractFileByPath(result.filePath);
-      if (!(target instanceof TFile)) {
-        new Notice("关联文章不存在。");
-        return;
+    for (const message of thread.messages) {
+      if (message.role === "user") {
+        const question = section(content, "kf-question");
+        setStyles(question, {
+          alignSelf: "stretch",
+          backgroundColor: "color-mix(in srgb, var(--interactive-accent) 15%, var(--background-primary))",
+          border: "1px solid color-mix(in srgb, var(--interactive-accent) 38%, var(--background-modifier-border))",
+          gap: "10px",
+          padding: "12px",
+          textAlign: "left",
+          width: "100%"
+        });
+        const questionText = text(question, message.content, "kf-question-text");
+        setStyles(questionText, { textAlign: "left", width: "100%" });
+        const footer = row(question);
+        setStyles(footer, { justifyContent: "space-between", width: "100%" });
+        text(footer, formatDate(message.createdAt), "kf-token-estimate");
+        const actions = row(footer);
+        setStyles(actions, { gap: "2px", marginLeft: "auto" });
+        const userAction = (label: string, icon: string, onClick: () => void): void => {
+          const action = setStyles(iconButton(actions, label, icon, onClick), {
+            backgroundColor: "transparent",
+            border: "0",
+            color: "var(--interactive-accent)",
+            height: "22px",
+            width: "22px"
+          });
+          const svg = action.querySelector<SVGSVGElement>("svg");
+          if (svg) Object.assign(svg.style, { height: "14px", width: "14px" });
+        };
+        userAction("复制问题", "copy", () => navigator.clipboard.writeText(message.content));
+        userAction("编辑并重新提问", "square-pen", () => {
+          this.composerDraft = message.content;
+          this.render();
+          window.requestAnimationFrame(() => {
+            const input = this.containerEl.querySelector<HTMLTextAreaElement>(".kf-input");
+            input?.focus();
+            input?.setSelectionRange(input.value.length, input.value.length);
+          });
+        });
+        userAction("删除本轮对话", "trash-2", () => {
+          this.deleteChatTurn(thread, message.id);
+        });
+        continue;
       }
-      const summary: NoteSummary = {
-        filePath: result.filePath,
-        title: result.contextLabel,
-        briefDescription: result.answer.replace(/\s+/g, " ").slice(0, 160),
-        summary: result.answer,
-        readingValue: 3,
-        recommendedAction: "skim",
-        category: this.plugin.settings.defaultArticleCategory,
-        reason: "用户从 Chat Result 手动保存为摘要。",
-        tags: []
-      };
-      await this.plugin.summaryNotes.applySummary(
-        target,
-        { summary: summary.summary, reason: summary.reason },
-        { description: summary.briefDescription, readingValue: summary.readingValue, category: summary.category, tags: summary.tags }
-      );
-      this.cacheSummaryText(target, { summary: summary.summary, reason: summary.reason });
-      new Notice("Saved as AI Summary");
-    });
-    button(actions, "生成 Quiz", async () => {
-      if (!result.filePath) {
-        new Notice("当前回答没有关联文章。");
-        return;
-      }
-      const target = this.app.vault.getAbstractFileByPath(result.filePath);
-      if (!(target instanceof TFile)) {
-        new Notice("关联文章不存在。");
-        return;
-      }
-      await this.generateQuiz(target);
-    });
 
-    this.renderComposer(root, this.plugin.router.getContext(), result.contextLabel, result.filePath ? this.app.vault.getAbstractFileByPath(result.filePath) as TFile : null);
+      const assistant = content.createDiv({ cls: "kf-assistant-message" });
+      setStyles(assistant, {
+        display: "flex",
+        flexDirection: "column",
+        gap: "8px"
+      });
+
+      const reasoning = assistant.createEl("details", { cls: "kf-thinking" });
+      setStyles(reasoning, {
+        backgroundColor: "var(--background-secondary)",
+        border: "1px solid color-mix(in srgb, var(--interactive-accent) 22%, var(--background-modifier-border))",
+        borderRadius: "8px",
+        display: message.reasoning ? "block" : "none",
+        padding: "9px 11px"
+      });
+      reasoning.createEl("summary", { text: "Thought process" });
+      const reasoningBody = reasoning.createDiv();
+      setStyles(reasoningBody, { fontSize: "12px", lineHeight: "1.5", marginTop: "7px", whiteSpace: "pre-wrap" });
+      reasoningBody.textContent = message.reasoning;
+
+      const answer = assistant.createDiv({ cls: "kf-answer" });
+      setStyles(answer, {
+        color: "var(--text-normal)",
+        fontSize: "13px",
+        lineHeight: "1.5",
+        minHeight: message.status === "pending" ? "24px" : "0",
+        whiteSpace: message.status === "done" ? "normal" : "pre-wrap"
+      });
+      if (message.status === "done") {
+        void this.renderMarkdownSummary(answer, message.content, thread.filePath ?? "");
+      } else if (message.status === "error") {
+        text(answer, `生成失败：${message.error ?? "未知错误"}`, "kf-muted");
+      } else {
+        answer.textContent = message.content || "正在等待模型响应…";
+      }
+
+      if (message.status === "pending" || message.status === "streaming") {
+        this.streamingAnswerEl = answer;
+        this.streamingReasoningEl = reasoningBody;
+      }
+
+      if (message.completedAt) {
+        const footer = row(assistant);
+        setStyles(footer, { justifyContent: "space-between", width: "100%" });
+        text(footer, formatDate(message.completedAt), "kf-muted");
+        const actions = row(footer);
+        setStyles(actions, { gap: "2px", marginLeft: "auto" });
+        const chatAction = (label: string, icon: string, onClick: () => void): void => {
+          const action = setStyles(iconButton(actions, label, icon, onClick), {
+            backgroundColor: "transparent",
+            border: "0",
+            height: "22px",
+            width: "22px"
+          });
+          const svg = action.querySelector<SVGSVGElement>("svg");
+          if (svg) Object.assign(svg.style, { height: "14px", width: "14px" });
+        };
+        chatAction("插入到光标下一行", "text-cursor-input", () => {
+          if (!insertBelowCursor(this.app, thread.filePath, message.content)) {
+            new Notice("未找到关联文章的编辑视图，请先打开关联文章。");
+          }
+        });
+        chatAction("复制回答", "copy", () => navigator.clipboard.writeText(message.content));
+        chatAction("重新生成", "refresh-cw", () => {
+          const previous = this.findPreviousUserMessage(thread, message.id);
+          if (previous) void this.submitChat(previous.content);
+        });
+        chatAction("存为摘要", "save", () => void this.saveAssistantAsSummary(thread, message));
+      }
+    }
+
+    const context = this.plugin.router.getContext();
+    const file = thread.filePath ? this.app.vault.getAbstractFileByPath(thread.filePath) : null;
+    this.renderComposer(root, context, thread.contextLabel, file instanceof TFile ? file : null);
   }
 
   private renderComposer(root: HTMLElement, context: ViewContext, label: string, file: TFile | null): void {
+    const usage = this.activeChatThread?.usage ?? emptyChatUsage();
+    const sending = this.activeChatThread?.messages.some((message) =>
+      message.role === "assistant" && (message.status === "pending" || message.status === "streaming")
+    ) ?? false;
     renderChatComposer(root, {
       contextLabel: label,
       modelName: this.plugin.settings.chatModel.model,
       draft: this.composerDraft,
       focusDraft: this.pendingComposerFocus,
+      tokenCount: usage.totalTokens,
+      tokenEstimated: usage.estimated,
+      sending,
       onDraftChange: (value) => {
         this.composerDraft = value;
       },
-      onSubmit: (question) => void this.submitChat(question, context, file)
+      onSubmit: (question) => void this.submitChat(question, context, file),
+      onSaveNote: () => void this.saveActiveChatToNote(),
+      onOpenHistory: () => void this.openChatHistory()
     });
   }
 
@@ -381,15 +456,130 @@ export class KnowFlowSidebarView extends ItemView {
       new Notice("Enter a question first");
       return;
     }
-    const content = file ? await this.app.vault.read(file) : "";
-    try {
-      this.chatResult = await this.plugin.ai.answer(context.mode, file?.path ?? null, file?.basename ?? "Current", question, content);
-    } catch (error) {
-      new Notice(`KnowFlow chat failed: ${error instanceof Error ? error.message : String(error)}`, 8000);
-      return;
-    }
+    const now = new Date().toISOString();
+    const thread = this.activeChatThread ?? createChatThread(context, file, now);
+    const userMessage = createChatMessage("user", question, now, "done");
+    const assistantMessage = createChatMessage("assistant", "", now, "pending");
+    thread.messages.push(userMessage, assistantMessage);
+    thread.updatedAt = now;
+    this.activeChatThread = thread;
     this.composerDraft = "";
     this.render();
+
+    const content = file ? await this.app.vault.read(file) : "";
+    let requestUsage = emptyChatUsage();
+    try {
+      assistantMessage.status = "streaming";
+      requestUsage = await this.plugin.ai.answerStream(
+        thread.contextLabel,
+        content,
+        thread.messages.filter((message) => message.id !== assistantMessage.id),
+        {
+          onContent: (delta) => {
+            assistantMessage.content += delta;
+            assistantMessage.status = "streaming";
+            if (this.streamingAnswerEl) this.streamingAnswerEl.textContent = assistantMessage.content;
+          },
+          onReasoning: (delta) => {
+            assistantMessage.reasoning += delta;
+            if (this.streamingReasoningEl) {
+              const details = this.streamingReasoningEl.closest("details") as HTMLElement | null;
+              if (details) details.style.display = "block";
+              this.streamingReasoningEl.textContent = assistantMessage.reasoning;
+            }
+          },
+          onUsage: (usage) => {
+            requestUsage = usage;
+          }
+        }
+      );
+      assistantMessage.status = "done";
+      assistantMessage.completedAt = new Date().toISOString();
+      thread.usage = addChatUsage(thread.usage, requestUsage);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      assistantMessage.status = "error";
+      assistantMessage.error = message;
+      assistantMessage.completedAt = new Date().toISOString();
+      new Notice(`KnowFlow chat failed: ${message}`, 8000);
+    }
+    if (file) {
+      thread.filePath = file.path;
+      thread.contextLabel = file.basename;
+    }
+    thread.updatedAt = assistantMessage.completedAt ?? new Date().toISOString();
+    this.render();
+  }
+
+  private findPreviousUserMessage(thread: ChatThread, assistantId: string): ChatMessage | null {
+    const index = thread.messages.findIndex((message) => message.id === assistantId);
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (thread.messages[cursor].role === "user") return thread.messages[cursor];
+    }
+    return null;
+  }
+
+  private deleteChatTurn(thread: ChatThread, userMessageId: string): void {
+    const index = thread.messages.findIndex((message) => message.id === userMessageId);
+    if (index < 0) return;
+    const count = thread.messages[index + 1]?.role === "assistant" ? 2 : 1;
+    thread.messages.splice(index, count);
+    thread.updatedAt = new Date().toISOString();
+    this.render();
+  }
+
+  private async saveAssistantAsSummary(thread: ChatThread, message: ChatMessage): Promise<void> {
+    if (!thread.filePath) return;
+    const target = this.app.vault.getAbstractFileByPath(thread.filePath);
+    if (!(target instanceof TFile)) {
+      new Notice("关联文章不存在。");
+      return;
+    }
+    const summary: NoteSummary = {
+      filePath: thread.filePath,
+      title: thread.contextLabel,
+      briefDescription: message.content.replace(/\s+/g, " ").slice(0, 160),
+      summary: message.content,
+      readingValue: 3,
+      recommendedAction: "skim",
+      category: this.plugin.settings.defaultArticleCategory,
+      reason: "用户从 Chat 手动保存为摘要。",
+      tags: []
+    };
+    await this.plugin.summaryNotes.applySummary(
+      target,
+      { summary: summary.summary, reason: summary.reason },
+      { description: summary.briefDescription, readingValue: summary.readingValue, category: summary.category, tags: summary.tags }
+    );
+    this.cacheSummaryText(target, { summary: summary.summary, reason: summary.reason });
+    new Notice("Saved as AI Summary");
+  }
+
+  private async saveActiveChatToNote(): Promise<void> {
+    if (!this.activeChatThread || this.activeChatThread.messages.length === 0) {
+      new Notice("当前没有可保存的对话。");
+      return;
+    }
+    const path = await this.plugin.chatNotes.saveThread(this.activeChatThread);
+    new Notice(`Chat 已保存到 ${path}`);
+  }
+
+  private async openChatHistory(): Promise<void> {
+    const root = this.containerEl.children[1] as HTMLElement;
+    const existing = root.querySelector(".kf-chat-history-layer");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const threads = await this.plugin.chatNotes.listThreads();
+    renderChatHistoryPopover(root, {
+      threads,
+      onClose: () => root.querySelector(".kf-chat-history-layer")?.remove(),
+      onOpen: (thread) => {
+        this.activeChatThread = thread;
+        this.render();
+      }
+    });
   }
 
   private async runPipeline(file: TFile): Promise<void> {
@@ -469,8 +659,7 @@ export class KnowFlowSidebarView extends ItemView {
     try {
       const content = await this.app.vault.read(file);
       const readingValue = this.getArticleReadingValue(file) || 3;
-      const count = readingValue >= 4 ? 8 : readingValue >= 2 ? 5 : 3;
-      const questions = await this.plugin.ai.generateQuiz(file.path, file.basename, content, count);
+      const questions = await this.plugin.ai.generateQuiz(file.path, file.basename, content, readingValue);
       if (questions.length === 0) {
         throw new Error("Quiz model did not return valid questions.");
       }
@@ -766,7 +955,7 @@ export class KnowFlowSidebarView extends ItemView {
   }
 
   private getRenderContextKey(): string {
-    if (this.chatResult) return `chat:${this.chatResult.filePath ?? this.chatResult.contextLabel}`;
+    if (this.activeChatThread) return `chat:${this.activeChatThread.id}`;
     if (this.quizSession) return `quiz:${this.quizSession.filePath}`;
     const context = this.plugin.router.getContext();
     return `${context.mode}:${context.activeFile?.path ?? context.selectedPath ?? ""}`;
@@ -810,6 +999,81 @@ export class KnowFlowSidebarView extends ItemView {
     });
   }
 
+}
+
+function createChatThread(context: ViewContext, file: TFile | null, now: string): ChatThread {
+  return {
+    id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sourceMode: context.mode,
+    filePath: file?.path ?? null,
+    contextLabel: file?.basename ?? "Current",
+    messages: [],
+    createdAt: now,
+    updatedAt: now,
+    usage: emptyChatUsage()
+  };
+}
+
+function createChatMessage(
+  role: ChatMessage["role"],
+  content: string,
+  createdAt: string,
+  status: ChatMessage["status"]
+): ChatMessage {
+  return {
+    id: `message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    content,
+    reasoning: "",
+    createdAt,
+    status
+  };
+}
+
+function emptyChatUsage(): ChatUsage {
+  return { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimated: false };
+}
+
+function addChatUsage(current: ChatUsage, next: ChatUsage): ChatUsage {
+  return {
+    promptTokens: current.promptTokens + next.promptTokens,
+    completionTokens: current.completionTokens + next.completionTokens,
+    totalTokens: current.totalTokens + next.totalTokens,
+    estimated: current.estimated || next.estimated
+  };
+}
+
+const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function debounceByKey(key: string, fn: () => void, delayMs: number): void {
+  const existing = debounceTimers.get(key);
+  if (existing) clearTimeout(existing);
+  debounceTimers.set(key, setTimeout(() => {
+    debounceTimers.delete(key);
+    fn();
+  }, delayMs));
+}
+
+/**
+ * Strips JSON syntax noise from streaming text so the user sees
+ * readable markdown, not raw JSON brackets and escaped newlines.
+ * Tries to extract the "summary" field first; falls back to showing
+ * the raw text with structural characters removed.
+ */
+function extractVisibleText(raw: string): string {
+  if (!raw) return "";
+  const summaryMatch = /"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(raw);
+  if (summaryMatch) {
+    return summaryMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, "\"");
+  }
+  return raw
+    .replace(/^```(?:json)?\s*/, "")
+    .replace(/\s*```$/, "")
+    .replace(/[{}\[\]]/g, "")
+    .replace(/"\w+":\s*/g, "")
+    .replace(/\\n/g, "\n")
+    .replace(/\\"/g, "\"")
+    .trim();
 }
 
 function estimateClippingAnalysisTokens(file: TFile): number {

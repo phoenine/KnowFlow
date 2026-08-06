@@ -58,13 +58,12 @@ const { MermaidService } = await import(pathToFileURL(join(tempDir, "mermaid-ser
   assert.ok(result.indexOf("**推荐理由**") < summaryEnd, "Knowledge Map must come after the summary, not before it");
 }
 
-// With no summary callout, fall back to appending at the very end (the
-// pre-existing behavior for notes that were never AI-summarized).
+// Without a summary callout, insert the map before the first H2 so it acts
+// as an outline for the article rather than an appendix.
 {
   const note = "## 正文标题\n\n这里是文章正文。";
   const result = await callUpsertKnowledgeMap(note);
-  assert.ok(result.trimEnd().endsWith("```"), "Knowledge Map must be appended at the end when there's no summary");
-  assert.ok(result.indexOf("## 正文标题") < result.indexOf("## Knowledge Map"));
+  assert.ok(result.indexOf("## Knowledge Map") < result.indexOf("## 正文标题"));
 }
 
 // Re-running generateForFile on a note that already has a Knowledge Map
@@ -74,7 +73,7 @@ const { MermaidService } = await import(pathToFileURL(join(tempDir, "mermaid-ser
     "> [!summary]- AI 摘要",
     "> 摘要正文。",
     "",
-    "## Knowledge Map",
+    "## 知识骨架",
     "",
     "```mermaid",
     "mindmap",
@@ -87,6 +86,7 @@ const { MermaidService } = await import(pathToFileURL(join(tempDir, "mermaid-ser
   ].join("\n");
   const result = await callUpsertKnowledgeMap(note);
   assert.equal((result.match(/## Knowledge Map/g) ?? []).length, 1, "must not duplicate the section");
+  assert.ok(!result.includes("## 知识骨架"), "legacy Chinese section title must be migrated");
   assert.ok(!result.includes("root((旧的))"), "old mermaid content must be replaced");
 }
 
@@ -102,7 +102,16 @@ async function callUpsertKnowledgeMap(content) {
       }
     }
   };
-  const svc = new MermaidService(app);
+  const ai = {
+    generateKnowledgeMap: async () => [
+      "graph LR",
+      "  H((\"核心主题\"))",
+      "  H --> A[\"阶段一\"]",
+      "  A -.-> A1[\"1.发现<br/>2.影响\"]",
+      "  style A fill:#fff5f5,stroke:#ff8787"
+    ].join("\n")
+  };
+  const svc = new MermaidService(app, ai);
   await svc.generateForFile({ basename: "标题" });
   return written;
 }

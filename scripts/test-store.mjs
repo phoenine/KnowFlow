@@ -174,6 +174,7 @@ function createHost(initial) {
     // quizAttempts/quizStats (see load() in store.ts).
     pipelineResults: [{ sourcePath: "a.md", targetPath: "a.md", title: "a", category: "AI", readingValue: 3, updatedAt: "2026-01-01T00:00:00.000Z" }],
     pipelineStatuses: {},
+    chatThreads: { "chat-1": { id: "chat-1" } },
     quizNotePaths: { "Articles/AI/legacy.md": "Archives/legacy Quiz.md" },
     learnedPaths: []
   });
@@ -183,6 +184,7 @@ function createHost(initial) {
   assert.equal("summaries" in store.exportData(), false, "the obsolete summaries index must be dropped entirely");
   assert.equal("quizNotePaths" in store.exportData(), false, "the obsolete quizNotePaths index must be dropped entirely");
   assert.equal("pipelineResults" in store.exportData(), false, "the legacy pipelineResults array must be dropped entirely");
+  assert.equal("chatThreads" in store.exportData(), false, "chat history belongs in markdown notes, not data.json");
 }
 
 await rm(tempDir, { recursive: true, force: true });

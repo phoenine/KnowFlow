@@ -103,16 +103,16 @@ export function text(parent: HTMLElement, content: string, className = ""): HTML
   if (className.includes("kf-question-text")) {
     return setStyles(el, {
       color: "var(--text-normal)",
-      fontSize: "16px",
-      fontWeight: "600",
-      lineHeight: "1.45",
+      fontSize: "13px",
+      fontWeight: "500",
+      lineHeight: "1.5",
       whiteSpace: "pre-wrap"
     });
   }
   if (className.includes("kf-answer-paragraph")) {
     return setStyles(el, {
       color: "var(--text-normal)",
-      fontSize: "14px",
+      fontSize: "13px",
       fontWeight: "450",
       lineHeight: "1.6",
       whiteSpace: "pre-wrap"

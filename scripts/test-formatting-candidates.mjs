@@ -15,6 +15,7 @@ await esbuild.build({
 });
 const {
   applyFormattingDecisions,
+  batchFormattingCandidates,
   collectFormattingCandidates,
   stripSequentialLineNumbers
 } = await import(pathToFileURL(join(tempDir, "formatting-candidates.js")).href);
@@ -105,6 +106,25 @@ assert.equal(
   const candidates = collectFormattingCandidates(longArticle);
   assert.equal(candidates.filter((candidate) => candidate.type === "fenced-code").length, 80);
   assert.ok(candidates.some((candidate) => candidate.content.includes("value79")), "late candidates must not be truncated");
+}
+
+{
+  const candidates = Array.from({ length: 40 }, (_, index) => ({
+    id: `long-${index}`,
+    type: "possible-heading",
+    startLine: index,
+    endLine: index,
+    content: `${index}-${"候选内容".repeat(180)}`,
+    before: "",
+    after: ""
+  }));
+  const batches = batchFormattingCandidates(candidates);
+  assert.ok(batches.length > 1, "long candidate sets must be split into multiple requests");
+  assert.deepEqual(
+    batches.flat().map((candidate) => candidate.id),
+    candidates.map((candidate) => candidate.id),
+    "batching must preserve every candidate in order"
+  );
 }
 
 await rm(tempDir, { recursive: true, force: true });

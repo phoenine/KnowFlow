@@ -154,5 +154,18 @@ assert.ok(movedCategory.includes("description: |\n  第一行\n  第二行"));
   assert.ok(withSummary.includes("# 原文标题\n正文内容"), "the body must be completely untouched");
 }
 
+{
+  const withTags = applySummaryFrontmatter("---\n分类: 测试\n---\n正文", {
+    description: "测试",
+    readingValue: 3,
+    category: "知识积累",
+    tags: ["product management", "#AI tools", "AI tools"]
+  });
+  assert.ok(withTags.includes("  - product-management"));
+  assert.ok(withTags.includes("  - AI-tools"));
+  assert.equal((withTags.match(/  - AI-tools/g) ?? []).length, 1);
+  assert.ok(!withTags.includes("product management"));
+}
+
 await rm(tempDir, { recursive: true, force: true });
 console.log("cleanup tests passed");

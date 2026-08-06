@@ -24,12 +24,14 @@ export interface KnowFlowSettings {
   articlesFolder: string;
   defaultArticleCategory: string;
   archiveFolder: string;
+  chatConversationFolder: string;
   templatePath: string;
   summaryModel: AiModelConfig;
   chatModel: AiModelConfig;
   quizModel: AiModelConfig;
   autoCreateCategoryFolders: boolean;
   confirmBeforeWrite: boolean;
+  translateEnglishClippings: boolean;
   autoOrganize: boolean;
   autoGenerateSummary: boolean;
   autoGenerateQuiz: boolean;
@@ -99,13 +101,33 @@ export interface PipelineUiState {
   visible: boolean;
 }
 
-export interface ChatResult {
+export interface ChatUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimated: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  reasoning: string;
+  createdAt: string;
+  completedAt?: string;
+  status: "pending" | "streaming" | "done" | "error";
+  error?: string;
+}
+
+export interface ChatThread {
+  id: string;
   sourceMode: KnowFlowMode;
   filePath: string | null;
   contextLabel: string;
-  question: string;
-  answer: string;
+  messages: ChatMessage[];
   createdAt: string;
+  updatedAt: string;
+  usage: ChatUsage;
 }
 
 export interface ViewContext {

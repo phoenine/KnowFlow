@@ -1,5 +1,6 @@
 import { Notice, Plugin, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { AiService } from "./services/ai-service";
+import { ChatNoteService } from "./services/chat-note-service";
 import { ClippingPipeline } from "./services/clipping-pipeline";
 import { MermaidService } from "./services/mermaid-service";
 import { PathRouter } from "./services/path-router";
@@ -16,6 +17,7 @@ export default class KnowFlowPlugin extends Plugin {
   store: KnowledgeStore;
   router: PathRouter;
   ai: AiService;
+  chatNotes: ChatNoteService;
   mermaid: MermaidService;
   pipeline: ClippingPipeline;
   quizNotes: QuizNoteService;
@@ -37,7 +39,8 @@ export default class KnowFlowPlugin extends Plugin {
     });
     await this.store.load();
     this.ai = new AiService(this.settings);
-    this.mermaid = new MermaidService(this.app);
+    this.chatNotes = new ChatNoteService(this.app, this.settings.chatConversationFolder);
+    this.mermaid = new MermaidService(this.app, this.ai);
     this.router = new PathRouter(this.app, this.settings);
     this.pipeline = new ClippingPipeline(this.app, this.settings, this.store, this.ai);
     this.quizNotes = new QuizNoteService(this.app, this.settings);
@@ -162,6 +165,7 @@ export default class KnowFlowPlugin extends Plugin {
     this.ai?.updateSettings(this.settings);
     this.pipeline?.updateSettings(this.settings);
     this.quizNotes?.updateSettings(this.settings);
+    this.chatNotes?.updateFolder(this.settings.chatConversationFolder);
     this.refreshView();
   }
 

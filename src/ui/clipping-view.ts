@@ -5,12 +5,12 @@ import { applyActionLayout, applyMetricsLayout, attachPressFeedback, button, car
 import { renderBrandShell } from "./shell";
 
 const CLIPPING_PIPELINE_STEPS = [
-  "清理残留格式",
   "整理 Markdown 样式",
-  "整理作者信息",
+  "AI 判断标题",
   "格式化代码块",
-  "去除明确广告残留",
-  "AI 判断标题和代码",
+  "AI 判断未围栏代码",
+  "AI 判断代码语言",
+  "英文翻译（可选）",
   "补全 Frontmatter"
 ];
 
@@ -19,6 +19,7 @@ interface ClippingViewProps {
   summary: NoteSummary | null;
   summaryPending: boolean;
   summaryError: string | undefined;
+  streamingText?: string;
   analysisCost: number;
   pipelineState: PipelineUiState | undefined;
   persistedPipeline: PipelineStatus;
@@ -77,6 +78,8 @@ function renderSummaryCard(content: HTMLElement, props: ClippingViewProps): void
   }
   if (props.summary) {
     props.renderMarkdownSummary(summary, `${props.summary.summary}${props.summary.reason ? `\n\n> ${props.summary.reason}` : ""}`);
+  } else if (props.summaryPending && props.streamingText) {
+    props.renderMarkdownSummary(summary, props.streamingText);
   } else {
     text(
       summary,

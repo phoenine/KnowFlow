@@ -17,6 +17,8 @@ export interface FormattingDecision {
   language?: string;
 }
 
+const FORMATTING_BATCH_CHARS = 16000;
+
 export function collectFormattingCandidates(content: string): FormattingCandidate[] {
   const lines = content.split("\n");
   const candidates: FormattingCandidate[] = [];
@@ -98,6 +100,26 @@ export function collectFormattingCandidates(content: string): FormattingCandidat
   }
 
   return candidates;
+}
+
+export function batchFormattingCandidates(candidates: FormattingCandidate[]): FormattingCandidate[][] {
+  const batches: FormattingCandidate[][] = [];
+  let batch: FormattingCandidate[] = [];
+  let chars = 0;
+
+  for (const candidate of candidates) {
+    const candidateChars = candidate.content.length + candidate.before.length + candidate.after.length;
+    if (batch.length > 0 && chars + candidateChars > FORMATTING_BATCH_CHARS) {
+      batches.push(batch);
+      batch = [];
+      chars = 0;
+    }
+    batch.push(candidate);
+    chars += candidateChars;
+  }
+
+  if (batch.length > 0) batches.push(batch);
+  return batches;
 }
 
 export function applyFormattingDecisions(
@@ -240,4 +262,99 @@ function possibleHeadingRange(lines: string[], index: number): { start: number; 
 function normalizeLanguage(value: string | undefined): string {
   const language = typeof value === "string" ? value.trim().toLowerCase() : "";
   return /^[a-z0-9_+-]{1,24}$/.test(language) ? language : "";
+}
+
+export function collectHeadingCandidates(content: string): FormattingCandidate[] {
+  const lines = content.split("\n");
+  const candidates: FormattingCandidate[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (!isPossibleHeadingStart(lines, index)) {
+      index += 1;
+      continue;
+    }
+    const range = possibleHeadingRange(lines, index);
+    candidates.push(makeCandidate(
+      candidates.length,
+      "possible-heading",
+      range.start,
+      range.end,
+      lines.slice(range.start, range.end + 1).join("\n"),
+      lines
+    ));
+    index = range.end + 1;
+  }
+  return candidates;
+}
+
+export function collectCodeCandidates(content: string): {
+  possibleCode: FormattingCandidate[];
+  fencedCode: FormattingCandidate[];
+} {
+  const lines = content.split("\n");
+  const occupied = new Set<number>();
+  const fencedCode: FormattingCandidate[] = [];
+  let inFence = false;
+  let fenceStart = -1;
+  let fenceLanguage = "";
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const fence = /^\s*```([^\s`]*)/.exec(lines[i]);
+    if (!fence) continue;
+    if (!inFence) {
+      inFence = true;
+      fenceStart = i;
+      fenceLanguage = fence[1].trim();
+      continue;
+    }
+    for (let j = fenceStart; j <= i; j += 1) occupied.add(j);
+    if (!fenceLanguage || fenceLanguage === "text" || fenceLanguage === "plain") {
+      fencedCode.push(makeCandidate(
+        fencedCode.length,
+        "fenced-code",
+        fenceStart,
+        i,
+        lines.slice(fenceStart + 1, i).join("\n"),
+        lines
+      ));
+    }
+    inFence = false;
+    fenceStart = -1;
+    fenceLanguage = "";
+  }
+
+  const possibleCode: FormattingCandidate[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (occupied.has(index) || !lines[index].trim() || isProtectedMarkdownLine(lines[index])) {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    while (
+      index + 1 < lines.length
+      && !occupied.has(index + 1)
+      && lines[index + 1].trim()
+      && !isProtectedMarkdownLine(lines[index + 1])
+    ) {
+      index += 1;
+    }
+    const end = index;
+    const block = lines.slice(start, end + 1);
+    if (looksLikeUnfencedCode(block, lines[start - 1] ?? "")) {
+      possibleCode.push(makeCandidate(possibleCode.length, "possible-code", start, end, block.join("\n"), lines));
+      for (let j = start; j <= end; j += 1) occupied.add(j);
+    }
+    index += 1;
+  }
+
+  return { possibleCode, fencedCode };
+}
+
+export function collectPossibleCodeCandidates(content: string): FormattingCandidate[] {
+  return collectCodeCandidates(content).possibleCode;
+}
+
+export function collectFencedCodeCandidates(content: string): FormattingCandidate[] {
+  return collectCodeCandidates(content).fencedCode;
 }

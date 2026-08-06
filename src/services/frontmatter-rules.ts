@@ -212,8 +212,13 @@ function normalizeCreationDate(value: string | undefined, today: string): string
  * end up anywhere Obsidian's own tag search/graph view can see them.
  */
 function formatTagsList(tags: string[]): string[] {
-  const list = tags.filter((tag) => tag.trim()).length > 0 ? tags.filter((tag) => tag.trim()) : ["clippings"];
-  return ["", ...list.map((tag) => `  - ${tag.trim()}`)];
+  const normalized = Array.from(new Set(tags.map(normalizeObsidianTag).filter(Boolean)));
+  const list = normalized.length > 0 ? normalized : ["clippings"];
+  return ["", ...list.map((tag) => `  - ${tag}`)];
+}
+
+function normalizeObsidianTag(value: string): string {
+  return value.trim().replace(/^#+/, "").replace(/\s+/g, "-");
 }
 
 function normalizeLearningStatus(value: string | string[] | undefined): string[] {

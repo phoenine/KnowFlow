@@ -1,13 +1,18 @@
 import { setIcon } from "obsidian";
-import { row, setStyles } from "./dom";
+import { attachPressFeedback, iconButton, row, setStyles } from "./dom";
 
 interface ChatComposerProps {
   contextLabel: string;
   modelName: string;
   draft: string;
   focusDraft: boolean;
+  tokenCount: number;
+  tokenEstimated: boolean;
+  sending: boolean;
   onDraftChange: (value: string) => void;
   onSubmit: (question: string) => void;
+  onSaveNote: () => void;
+  onOpenHistory: () => void;
 }
 
 export function renderChatComposer(root: HTMLElement, props: ChatComposerProps): void {
@@ -27,7 +32,7 @@ export function renderChatComposer(root: HTMLElement, props: ChatComposerProps):
     minHeight: "24px"
   });
   const mode = row(toolbar);
-  setStyles(mode, { gap: "4px" });
+  setStyles(mode, { gap: "8px" });
   setStyles(mode.createDiv({ text: "chat (free)" }), {
     color: "var(--text-normal)",
     fontSize: "13px",
@@ -39,16 +44,26 @@ export function renderChatComposer(root: HTMLElement, props: ChatComposerProps):
     color: "var(--text-muted)",
     display: "inline-flex"
   });
-  const tools = row(toolbar);
-  setStyles(tools, { gap: "6px" });
-  ["message-circle-plus", "settings", "download", "history", "more-horizontal"].forEach((icon) => {
-    const tool = tools.createSpan();
-    setIcon(tool, icon);
-    setStyles(tool, {
-      color: "var(--text-muted)",
-      display: "inline-flex"
-    });
+  setStyles(mode.createDiv({
+    text: `${props.tokenEstimated ? "~" : ""}${formatTokenCount(props.tokenCount)}`,
+    cls: "kf-chat-tokens"
+  }), {
+    color: "var(--text-muted)",
+    fontSize: "12px",
+    fontWeight: "600"
   });
+  const tools = row(toolbar);
+  setStyles(tools, { gap: "2px" });
+  const tool = (label: string, icon: string, onClick: () => void): void => {
+    setStyles(iconButton(tools, label, icon, onClick), {
+      backgroundColor: "transparent",
+      border: "0",
+      height: "26px",
+      width: "26px"
+    });
+  };
+  tool("保存到 Note", "download", props.onSaveNote);
+  tool("历史对话", "history", props.onOpenHistory);
 
   const panel = composer.createDiv({ cls: "kf-composer-panel" });
   setStyles(panel, {
@@ -108,6 +123,11 @@ export function renderChatComposer(root: HTMLElement, props: ChatComposerProps):
   });
   input.value = props.draft;
   input.addEventListener("input", () => props.onDraftChange(input.value));
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    if (!props.sending) props.onSubmit(input.value.trim());
+  });
   input.addEventListener("focus", () => {
     setStyles(panel, {
       borderColor: "var(--interactive-accent)",
@@ -155,27 +175,37 @@ export function renderChatComposer(root: HTMLElement, props: ChatComposerProps):
     height: "28px"
   });
   const send = sendTools.createEl("button");
+  send.setAttribute("aria-label", "发送");
+  send.setAttribute("title", "发送");
   setStyles(send, {
     alignItems: "center",
-    backgroundColor: "color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary))",
-    border: "1px solid color-mix(in srgb, var(--interactive-accent) 42%, var(--background-modifier-border))",
-    borderRadius: "7px",
+    backgroundColor: "transparent",
+    border: "0",
+    borderRadius: "6px",
     color: "var(--text-accent)",
     cursor: "pointer",
     display: "inline-flex",
-    fontSize: "13px",
-    fontWeight: "600",
-    gap: "5px",
     justifyContent: "center",
     lineHeight: "1",
-    minHeight: "28px",
-    padding: "6px 12px"
+    height: "28px",
+    padding: "4px",
+    width: "28px"
   });
   const sendIcon = send.createSpan();
   setIcon(sendIcon, "send-horizontal");
   setStyles(sendIcon, { display: "inline-flex" });
-  send.createSpan({ text: "chat" });
-  send.addEventListener("click", () => props.onSubmit(input.value.trim()));
+  send.disabled = props.sending;
+  if (props.sending) setStyles(send, { cursor: "default", opacity: "0.55" });
+  attachPressFeedback(send);
+  send.addEventListener("click", () => {
+    if (!props.sending) props.onSubmit(input.value.trim());
+  });
+}
+
+function formatTokenCount(value: number): string {
+  if (value < 1000) return String(value);
+  const rounded = value >= 10000 ? Math.round(value / 1000) : Math.round(value / 100) / 10;
+  return `${rounded}k`;
 }
 
 export function applyChipStyle(el: HTMLElement): void {

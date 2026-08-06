@@ -25,11 +25,13 @@ export const DEFAULT_SETTINGS: KnowFlowSettings = {
   articlesFolder: "Articles",
   defaultArticleCategory: "知识积累",
   archiveFolder: "Archives",
+  chatConversationFolder: "copilot-conversations",
   templatePath: "Template/article.md",
   summaryModel: { ...DEFAULT_MODEL_CONFIG },
   chatModel: { ...DEFAULT_MODEL_CONFIG },
   quizModel: { ...DEFAULT_MODEL_CONFIG },
   confirmBeforeWrite: false,
+  translateEnglishClippings: false,
   autoOrganize: false,
   autoGenerateSummary: false,
   autoGenerateQuiz: false,
@@ -122,6 +124,19 @@ export class KnowFlowSettingTab extends PluginSettingTab {
       );
 
     new Setting(vault)
+      .setName("Chat conversation folder")
+      .setDesc("Only conversations explicitly saved from Chat are stored here and shown in history.")
+      .addText((text) =>
+        text
+          .setPlaceholder("copilot-conversations")
+          .setValue(this.plugin.settings.chatConversationFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.chatConversationFolder = value.trim() || DEFAULT_SETTINGS.chatConversationFolder;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(vault)
       .setName("Article template")
       .setDesc("Frontmatter field reference. Defaults to your current Template/article.md.")
       .addText((text) =>
@@ -183,6 +198,18 @@ export class KnowFlowSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.confirmBeforeWrite)
           .onChange(async (value) => {
             this.plugin.settings.confirmBeforeWrite = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(pipeline)
+      .setName("Translate English clippings")
+      .setDesc("When an article is predominantly English, insert a Chinese translation directly below each English prose paragraph. Code, Callouts and structured Markdown are skipped.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.translateEnglishClippings)
+          .onChange(async (value) => {
+            this.plugin.settings.translateEnglishClippings = value;
             await this.plugin.saveSettings();
           })
       );

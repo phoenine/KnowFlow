@@ -21,11 +21,13 @@ export function renderShell(root: HTMLElement, title: string, status: string, on
   if (onBack) {
     iconButton(left, "Back", "arrow-left", onBack);
   }
-  setStyles(left.createDiv({ text: title, cls: "kf-title" }), {
-    color: "var(--text-normal)",
-    fontSize: "20px",
-    fontWeight: "650"
-  });
+  if (title) {
+    setStyles(left.createDiv({ text: title, cls: "kf-title" }), {
+      color: "var(--text-normal)",
+      fontSize: "20px",
+      fontWeight: "650"
+    });
+  }
   setStyles(header.createDiv({ text: status, cls: "kf-status" }), {
     color: "var(--text-accent)",
     fontSize: "12px",

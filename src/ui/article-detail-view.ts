@@ -38,7 +38,7 @@ export function renderArticleDetailView(root: HTMLElement, props: ArticleDetailV
   cardHeader(mapCard, "git-fork", "Knowledge Map", (header) => {
     text(header, "Mermaid", "kf-pill");
   });
-  text(mapCard, "将当前文章的概念结构生成 Mermaid，并插入原文的 ## Knowledge Map 区块。", "kf-muted");
+  text(mapCard, "AI 根据文章结构选择辐射图、时间线或思维导图，并插入原文的 ## Knowledge Map 区块。", "kf-muted");
   const mapActions = row(mapCard, "kf-actions");
   applyActionLayout(mapActions);
   button(mapActions, "生成 Mermaid", props.onGenerateKnowledgeMap, true);

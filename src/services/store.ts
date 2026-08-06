@@ -29,8 +29,10 @@ export class KnowledgeStore {
       ...persisted
     } as StoredData;
 
+    const hadChatThreads = "chatThreads" in persisted;
     delete (this.data as StoredData & { summaries?: unknown }).summaries;
     delete (this.data as StoredData & { quizNotePaths?: unknown }).quizNotePaths;
+    delete (this.data as StoredData & { chatThreads?: unknown }).chatThreads;
     // Drop fields from older plugin versions so they don't linger in
     // data.json forever: quizStats was a short-lived intermediate shape,
     // quizzes/quizAttempts were replaced by markdown quiz notes (see
@@ -43,6 +45,7 @@ export class KnowledgeStore {
     delete legacy.quizzes;
     delete legacy.quizAttempts;
     delete legacy.pipelineResults;
+    if (hadChatThreads) await this.save();
   }
 
   async save(): Promise<void> {

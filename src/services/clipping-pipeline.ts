@@ -2,14 +2,20 @@ import { Notice, TFile, normalizePath } from "obsidian";
 import type { App } from "obsidian";
 import type { KnowFlowSettings } from "../types";
 import type { AiService } from "./ai-service";
-import { cleanupPromotionalNoise, removeCodeWatermarkLines } from "./cleanup-rules";
+import { removeCodeWatermarkLines } from "./cleanup-rules";
 import {
   applyFormattingDecisions,
-  collectFormattingCandidates,
+  collectCodeCandidates,
+  collectHeadingCandidates,
   stripSequentialLineNumbers
 } from "./formatting-candidates";
 import { applyArticleFrontmatter, updateFrontmatterCategory } from "./frontmatter-rules";
 import { KnowledgeStore } from "./store";
+import {
+  applyTranslationDecisions,
+  collectTranslationCandidates,
+  isPredominantlyEnglishArticle
+} from "./translation-candidates";
 
 export const ARTICLE_CATEGORIES = [
   "人工智能",
@@ -45,25 +51,32 @@ export class ClippingPipeline {
     };
 
     try {
-      await report("清理残留格式");
+      await report("整理 Markdown 样式");
       const original = await this.app.vault.read(file);
       const title = file.basename;
       let formatted = this.stripFrontmatterBody(original);
       this.assertReadableBody(formatted);
 
-      formatted = this.cleanResidualFormat(formatted);
-      await report("整理 Markdown 样式");
       formatted = this.organizeMarkdownStyle(formatted);
-      await report("整理作者信息");
-      formatted = this.editSectionStructure(formatted);
+      await report("AI 判断标题");
+      const headingCandidates = collectHeadingCandidates(formatted);
+      const headingDecisions = await this.ai.analyzeHeadingCandidates(title, headingCandidates);
+      formatted = applyFormattingDecisions(formatted, headingCandidates, headingDecisions);
       await report("格式化代码块");
       formatted = this.formatCodeBlocks(formatted);
-      await report("去除明确广告残留");
-      formatted = this.removePromotionalNoise(formatted);
-      await report("AI 判断标题和代码");
-      const candidates = collectFormattingCandidates(formatted);
-      const decisions = await this.ai.analyzeFormattingCandidates(title, candidates);
-      formatted = applyFormattingDecisions(formatted, candidates, decisions);
+      await report("AI 判断未围栏代码");
+      const codeResult = collectCodeCandidates(formatted);
+      const codeDecisions = await this.ai.analyzePossibleCodeCandidates(title, codeResult.possibleCode);
+      formatted = applyFormattingDecisions(formatted, codeResult.possibleCode, codeDecisions);
+      await report("AI 判断代码语言");
+      const fencedDecisions = await this.ai.analyzeFencedCodeCandidates(title, codeResult.fencedCode);
+      formatted = applyFormattingDecisions(formatted, codeResult.fencedCode, fencedDecisions);
+      await report("英文翻译（可选）");
+      if (this.settings.translateEnglishClippings && isPredominantlyEnglishArticle(formatted)) {
+        const translationCandidates = collectTranslationCandidates(formatted);
+        const translations = await this.ai.translateEnglishParagraphs(title, translationCandidates);
+        formatted = applyTranslationDecisions(formatted, translationCandidates, translations);
+      }
       const normalized = this.normalizeFinalBody(formatted);
       await report("补全 Frontmatter");
       const withFrontmatter = await this.applyFrontmatter(normalized, original, { title });
@@ -134,29 +147,20 @@ export class ClippingPipeline {
     }
   }
 
-  private cleanResidualFormat(content: string): string {
-    const fixedLinks = fixSwallowedUrlPunctuation(stripOrphanBoldDelimiters(content).replace(/\u00a0/g, " "));
-    return mapLinesOutsideCode(fixedLinks, (line) =>
-      normalizeListIndent(line)
+  private organizeMarkdownStyle(content: string): string {
+    const noNbsp = stripOrphanBoldDelimiters(content).replace(/\u00a0/g, " ");
+    return mapLinesOutsideCode(noNbsp, (line) => {
+      let next = normalizeListIndent(line)
         .replace(/\t/g, "  ")
         .replace(/^(\s*)•\s+/g, "$1- ")
         .replace(/\*\*\*\*([^*\n]+)\*\*\*\*/g, "**$1**")
         .replace(/\*\*(.+?)\*\*\*\*/g, "**$1**")
         .replace(/\*\*\*\*(.+?)\*\*/g, "**$1**")
-        .replace(/[ \t]+$/g, "")
-    );
-  }
-
-  private organizeMarkdownStyle(content: string): string {
-    return mapLinesOutsideCode(content, (line) => {
-      let next = line.replace(/^(\s*)(\d+)[、)]\s+/g, "$1$2. ");
+        .replace(/[ \t]+$/g, "");
+      next = next.replace(/^(\s*)(\d+)[、)]\s+/g, "$1$2. ");
       next = next.replace(/^\s+\|(\s*:?-{3,}:?\s*\|.*)$/g, "|$1");
       return next;
     });
-  }
-
-  private editSectionStructure(content: string): string {
-    return formatAuthorMetadata(content);
   }
 
   private formatCodeBlocks(content: string): string {
@@ -169,10 +173,6 @@ export class ClippingPipeline {
       const lang = normalizeCodeLanguage(rawLang, body);
       return `\`\`\`${lang}\n${body.trim()}\n\`\`\``;
     });
-  }
-
-  private removePromotionalNoise(content: string): string {
-    return cleanupPromotionalNoise(content);
   }
 
   private normalizeFinalBody(content: string): string {
@@ -225,28 +225,11 @@ function normalizeListIndent(line: string): string {
   return `${" ".repeat(spaces - 1)}${line.slice(spaces)}`;
 }
 
-function fixSwallowedUrlPunctuation(content: string): string {
-  return content
-    .replace(/\[([^\]\s]+?)。\]\(([^)]+?)%E3%80%82\)/g, "[$1]($2)。")
-    .replace(/\[([^\]\s]+?)）。\]\(([^)]+?)%EF%BC%89%E3%80%82\)/g, "[$1]($2)。")
-    .replace(/（\[([^\]]+?)\]\(([^)]+?)%EF%BC%89\)）/g, "（[$1]($2)）");
-}
-
 function stripOrphanBoldDelimiters(content: string): string {
   return content.replace(
     /(^|\n)[ \t]*\*\*[ \t]*\n+([^\n*][^\n]*?)\n+[ \t]*\*\*[ \t]*(?=\n|$)/g,
     (_match, prefix: string, title: string) => `${prefix}**${title.trim()}**`
   );
-}
-
-function formatAuthorMetadata(content: string): string {
-  return mapLinesOutsideCode(content, (line) => {
-    const trimmed = line.trim();
-    if (/^(作者|审校|编辑|编译|策划)\s*[|｜]\s+.+/.test(trimmed) && !trimmed.startsWith("*")) {
-      return line.replace(trimmed, `*${trimmed}*`);
-    }
-    return line;
-  });
 }
 
 function normalizeCodeLanguage(rawLang: string, body: string): string {
