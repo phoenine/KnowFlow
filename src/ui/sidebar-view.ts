@@ -612,6 +612,7 @@ export class KnowFlowSidebarView extends ItemView {
     if (this.pipelineStates.get(file.path)?.running) return;
     this.pipelineStates.set(file.path, {
       completed: [],
+      skipped: [],
       currentStep: null,
       error: null,
       failedStep: null,
@@ -620,13 +621,19 @@ export class KnowFlowSidebarView extends ItemView {
     });
     this.render();
     try {
-      await this.plugin.pipeline.process(file, (step) => {
+      await this.plugin.pipeline.process(file, (step, status) => {
         const state = this.pipelineStates.get(file.path);
         if (!state) return;
-        if (state.currentStep && !state.completed.includes(state.currentStep)) {
-          state.completed.push(state.currentStep);
+        if (status === "active") {
+          if (state.currentStep && state.currentStep !== step && !state.completed.includes(state.currentStep)) {
+            state.completed.push(state.currentStep);
+          }
+          state.currentStep = step;
+        } else {
+          const target = status === "completed" ? state.completed : state.skipped;
+          if (!target.includes(step)) target.push(step);
+          if (state.currentStep === step) state.currentStep = null;
         }
-        state.currentStep = step;
         state.running = true;
         state.visible = true;
         this.pipelineStates.set(file.path, state);

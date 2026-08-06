@@ -49,9 +49,15 @@ export class ClippingPipeline {
     this.settings = settings;
   }
 
-  async process(file: TFile, onProgress?: (step: string) => void): Promise<void> {
-    const report = async (step: string): Promise<void> => {
-      onProgress?.(step);
+  async process(
+    file: TFile,
+    onProgress?: (step: string, status: "active" | "completed" | "skipped") => void
+  ): Promise<void> {
+    const report = async (
+      step: string,
+      status: "active" | "completed" | "skipped" = "active"
+    ): Promise<void> => {
+      onProgress?.(step, status);
       await Promise.resolve();
     };
 
@@ -86,9 +92,11 @@ export class ClippingPipeline {
         formatted = this.applyAutoCodeWraps(formatted, highConfidence);
       }
 
+      if (!hasMediumCode) await report("AI 判断未围栏代码", "skipped");
+      if (!hasFencedCode) await report("AI 判断代码语言", "skipped");
+
       if (hasMediumCode || hasFencedCode) {
-        const codeLabel = hasMediumCode ? "AI 判断未围栏代码" : "AI 判断代码语言";
-        await report(codeLabel);
+        await report(hasMediumCode ? "AI 判断未围栏代码" : "AI 判断代码语言");
         const [codeDecisions, fencedDecisions] = await Promise.all([
           hasMediumCode
             ? this.ai.analyzePossibleCodeCandidates(title, mediumConfidence)
@@ -103,9 +111,8 @@ export class ClippingPipeline {
         if (hasFencedCode) {
           formatted = applyFormattingDecisions(formatted, codeResult.fencedCode, fencedDecisions);
         }
-      } else {
-        await report("AI 判断未围栏代码");
-        await report("AI 判断代码语言");
+        if (hasMediumCode) await report("AI 判断未围栏代码", "completed");
+        if (hasFencedCode) await report("AI 判断代码语言", "completed");
       }
 
       // Phase 4: 标题 LLM（放在代码整理之后，候选质量更高）

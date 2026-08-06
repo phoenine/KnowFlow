@@ -252,6 +252,7 @@ function renderPipelineProgress(parent: HTMLElement, state: PipelineUiState): vo
 
   for (const step of CLIPPING_PIPELINE_STEPS) {
     const done = state.completed.includes(step);
+    const skipped = state.skipped.includes(step);
     const active = state.currentStep === step;
     const failed = state.failedStep === step;
     const item = row(list, "kf-pipeline-step");
@@ -262,16 +263,26 @@ function renderPipelineProgress(parent: HTMLElement, state: PipelineUiState): vo
     const left = row(item);
     setStyles(left, { gap: "7px", minWidth: "0" });
     const icon = left.createSpan();
-    setIcon(icon, failed ? "circle-x" : done ? "check" : active ? "loader-2" : "circle");
+    setIcon(icon, failed ? "circle-x" : done ? "check" : skipped ? "minus" : active ? "loader-2" : "circle");
     setStyles(icon, {
-      color: failed ? "var(--text-error)" : done || active ? "var(--interactive-accent)" : "var(--text-faint)",
+      color: failed
+        ? "var(--text-error)"
+        : done || active
+          ? "var(--interactive-accent)"
+          : "var(--text-faint)",
       display: "inline-flex",
       flex: "0 0 auto"
     });
     text(left, step, "kf-step");
-    const status = item.createDiv({ text: failed ? "失败" : done ? "完成" : active ? "进行中" : "等待" });
+    const status = item.createDiv({
+      text: failed ? "失败" : done ? "完成" : skipped ? "跳过" : active ? "进行中" : "等待"
+    });
     setStyles(status, {
-      color: failed ? "var(--text-error)" : done || active ? "var(--text-accent)" : "var(--text-faint)",
+      color: failed
+        ? "var(--text-error)"
+        : done || active
+          ? "var(--text-accent)"
+          : "var(--text-faint)",
       flex: "0 0 auto",
       fontSize: "12px",
       fontWeight: active ? "600" : "500",
