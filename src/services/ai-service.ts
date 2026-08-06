@@ -59,10 +59,16 @@ interface KnowledgeMapResponse {
 const REQUEST_TIMEOUT_MS = 360000;
 
 export class AiService {
+  private skillText = "";
+
   constructor(private settings: KnowFlowSettings) {}
 
   updateSettings(settings: KnowFlowSettings): void {
     this.settings = settings;
+  }
+
+  setSkill(skill: string): void {
+    this.skillText = skill;
   }
 
   async summarize(filePath: string, title: string, content: string, fallbackCategory: string): Promise<NoteSummary> {
@@ -215,7 +221,7 @@ export class AiService {
         const payload = await this.requestJson<FormattingResponse>(this.settings.pipelineModel, [
           {
             role: "system",
-            content: [
+            content: (this.skillText ? `${this.skillText}\n\n` : "") + [
               "你是 KnowFlow 的文章标题分类器。只判断候选文本是否为文章小节标题。",
               "不确定时返回 keep，不要强行标记。",
               "确认为标题时返回 heading + H2/H3/H4。",
@@ -254,7 +260,7 @@ export class AiService {
         const payload = await this.requestJson<FormattingResponse>(this.settings.pipelineModel, [
           {
             role: "system",
-            content: [
+            content: (this.skillText ? `${this.skillText}\n\n` : "") + [
               "你是 KnowFlow 的代码块分类器。只判断候选文本是否为未围栏代码（无 ``` 包裹）。",
               "确认为代码时返回 wrap-code + 语言标识（如 python/typescript/bash）。",
               "不是代码时返回 keep。",
@@ -292,7 +298,7 @@ export class AiService {
         const payload = await this.requestJson<FormattingResponse>(this.settings.pipelineModel, [
           {
             role: "system",
-            content: [
+            content: (this.skillText ? `${this.skillText}\n\n` : "") + [
               "你是 KnowFlow 的代码语言分类器。只判断已有围栏（```）包裹的代码块的语言标识。",
               "返回 set-code-language + 准确语言（如 python/javascript/sql）。",
               "无法判断时返回 keep。",
@@ -330,7 +336,7 @@ export class AiService {
         const payload = await this.requestJson<TranslationResponse>(this.settings.pipelineModel, [
           {
             role: "system",
-            content: [
+            content: (this.skillText ? `${this.skillText}\n\n` : "") + [
               "你是专业的英译中编辑。把每个英文段落准确、自然地翻译成简体中文。",
               "必须完整保留原意、专有名词、数字、URL、Markdown 链接和行内代码，不添加解释、标题或“翻译”标签。",
               "每个输入 id 必须返回且只能返回一次；不得合并、拆分或遗漏段落。",

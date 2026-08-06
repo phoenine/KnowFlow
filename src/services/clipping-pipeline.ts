@@ -13,6 +13,7 @@ import {
   type FormattingCandidate
 } from "./formatting-candidates";
 import { applyArticleFrontmatter, updateFrontmatterCategory } from "./frontmatter-rules";
+import { loadUserSkillFile, loadSkill } from "./repair-skill";
 import { validateMarkdownIntegrity } from "./repair-validator";
 import { KnowledgeStore } from "./store";
 import {
@@ -64,6 +65,10 @@ export class ClippingPipeline {
       // Phase 1: 规则清理
       formatted = normalizeOrphanBoldTriplet(formatted);
       formatted = this.organizeMarkdownStyle(formatted);
+
+      // Load Clipping Repair Skill (builtin + user vault override) before any LLM call
+      const userSkill = await loadUserSkillFile(this.app.vault.adapter);
+      this.ai.setSkill(loadSkill(userSkill ?? undefined));
 
       // Phase 2: 代码格式化（规则，先跑，把代码块结构定下来）
       await report("格式化代码块");
