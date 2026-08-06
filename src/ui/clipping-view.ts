@@ -111,6 +111,9 @@ function renderSummaryCard(content: HTMLElement, props: ClippingViewProps): void
     const latestEl = flow.createSpan({ cls: "kf-streaming-reasoning-latest" });
     setStyles(latestEl, { color: "var(--text-normal)", fontWeight: "500" });
     updateStreamingReasoning(historyEl, latestEl, props.streamingReasoning);
+    // 推理过程中仍显示提示文案和 token 预估
+    text(summary, "正在根据当前 Clipping 生成摘要、阅读价值和分类建议。", "kf-muted");
+    text(summary, `预计消耗：约 ${props.analysisCost}k tokens`, "kf-token-estimate");
   } else {
     text(
       summary,
