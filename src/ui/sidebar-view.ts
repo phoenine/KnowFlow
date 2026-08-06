@@ -423,7 +423,7 @@ export class KnowFlowSidebarView extends ItemView {
       if (message.completedAt) {
         const footer = row(assistant);
         setStyles(footer, { justifyContent: "space-between", width: "100%" });
-        text(footer, formatDate(message.completedAt), "kf-muted");
+        text(footer, formatDate(message.completedAt), "kf-token-estimate");
         const actions = row(footer);
         setStyles(actions, { gap: "2px", marginLeft: "auto" });
         const chatAction = (label: string, icon: string, onClick: () => void): void => {

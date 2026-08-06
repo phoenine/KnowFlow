@@ -108,6 +108,7 @@ export class ClippingPipeline {
         const headingDecisions = await this.ai.analyzeHeadingCandidates(title, headingCandidates);
         formatted = applyFormattingDecisions(formatted, headingCandidates, headingDecisions);
       }
+      formatted = this.normalizeHeadingLevels(formatted);
 
       // Phase 6: 英文翻译
       await report("英文翻译（可选）");
@@ -246,6 +247,30 @@ export class ClippingPipeline {
       }
     }
     return lines.join("\n");
+  }
+
+  /**
+   * If the shallowest heading in the article is H3 or deeper, promote all
+   * headings by one level (###→##, ####→###, etc.), capped at H2 minimum.
+   * The article title itself is the implicit H1.
+   */
+  private normalizeHeadingLevels(content: string): string {
+    const lines = content.split("\n");
+    let minLevel = 6;
+    for (const line of lines) {
+      const match = /^(#{1,6})\s/.exec(line);
+      if (match) minLevel = Math.min(minLevel, match[1].length);
+    }
+    // H2 or shallower — already correct
+    if (minLevel <= 2) return content;
+    // Promote by (minLevel - 2) levels so shallowest becomes H2
+    const shift = minLevel - 2;
+    return lines.map((line) => {
+      const match = /^(#{1,6})\s/.exec(line);
+      if (!match) return line;
+      const newLevel = Math.max(2, match[1].length - shift);
+      return `${"#".repeat(newLevel)}${line.slice(match[1].length)}`;
+    }).join("\n");
   }
 
   private normalizeFinalBody(content: string): string {
