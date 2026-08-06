@@ -101,6 +101,9 @@ export class ClippingPipeline {
         if (hasFencedCode) {
           formatted = applyFormattingDecisions(formatted, codeResult.fencedCode, fencedDecisions);
         }
+      } else {
+        await report("AI 判断未围栏代码");
+        await report("AI 判断代码语言");
       }
 
       // Phase 5: HIGH 置信度代码直接包围栏（无 LLM）
@@ -193,7 +196,9 @@ export class ClippingPipeline {
   }
 
   private organizeMarkdownStyle(content: string): string {
-    const noNbsp = stripOrphanBoldDelimiters(content).replace(/\u00a0/g, " ");
+    const noNbsp = stripOrphanBoldDelimiters(content)
+      .replace(/\u00a0/g, " ")
+      .replace(/(^|\n)\s*\*\*\s*(\n|$)/g, "$1$2");  // remove standalone ** lines
     return mapLinesOutsideCode(noNbsp, (line) => {
       let next = normalizeListIndent(line)
         .replace(/\t/g, "  ")
@@ -202,7 +207,10 @@ export class ClippingPipeline {
         .replace(/\*\*(.+?)\*\*\*\*/g, "**$1**")
         .replace(/\*\*\*\*(.+?)\*\*/g, "**$1**")
         .replace(/[ \t]+$/g, "");
-      next = next.replace(/^(#{1,6})\s+\d+[.\、\)]\s*\d+$/g, "$1 ");
+      // Clean trailing ** from heading lines (orphan bold artifact)
+      next = next.replace(/^(#{1,6}\s+.*?)\s*\*\*\s*$/g, "$1");
+      // Clean pure-number heading noise: "## 1. 01" → "## "
+      next = next.replace(/^(#{1,6})\s+\d+[.\、\)]\s*\d*\s*$/g, "$1 ");
       next = next.replace(/^(\s*)(\d+)[、)]\s+/g, "$1$2. ");
       next = next.replace(/^\s+\|(\s*:?-{3,}:?\s*\|.*)$/g, "|$1");
       return next;

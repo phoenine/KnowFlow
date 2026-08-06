@@ -290,6 +290,20 @@ function normalizeLanguage(value: string | undefined): string {
   return /^[a-z0-9_+-]{1,24}$/.test(language) ? language : "";
 }
 
+/**
+ * Strip bold markers and trim. Returns empty string if the result is
+ * a pure number or empty — these should not be sent to the LLM.
+ */
+function normalizeCandidateContent(text: string): string {
+  const normalized = text
+    .replace(/^\*{1,2}|\*{1,2}$/g, "")
+    .trim();
+  if (!normalized) return "";
+  // Pure numbers
+  if (/^\d{1,3}[.)、]?$/.test(normalized)) return "";
+  return normalized;
+}
+
 export function collectHeadingCandidates(content: string): FormattingCandidate[] {
   const lines = content.split("\n");
   const candidates: FormattingCandidate[] = [];
@@ -300,12 +314,18 @@ export function collectHeadingCandidates(content: string): FormattingCandidate[]
       continue;
     }
     const range = possibleHeadingRange(lines, index);
+    const rawContent = lines.slice(range.start, range.end + 1).join("\n");
+    const normalized = normalizeCandidateContent(rawContent);
+    if (!normalized) {
+      index = range.end + 1;
+      continue;
+    }
     candidates.push(makeCandidate(
       candidates.length,
       "possible-heading",
       range.start,
       range.end,
-      lines.slice(range.start, range.end + 1).join("\n"),
+      normalized,
       lines
     ));
     index = range.end + 1;
