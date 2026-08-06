@@ -66,57 +66,11 @@ export class AiService {
   }
 
   async summarize(filePath: string, title: string, content: string, fallbackCategory: string): Promise<NoteSummary> {
-    const payload = await this.requestJson<SummaryResponse>(this.settings.summaryModel, [
-      {
-        role: "system",
-        content: [
-          "你是 KnowFlow 的 Obsidian Clipping 分析器。",
-          "必须基于文章语义判断，不允许用文章长度或关键词粗略猜测。",
-          "KnowFlow 的目标不是把所有文章都变成学习材料，而是帮助用户决定是否值得投入学习时间。",
-          "你需要输出严格 JSON，不要输出 markdown。",
-          "阅读价值必须是 1-5 的整数：1=低价值或广告，2=浅层资讯，3=普通教程/观点，4=深入技术文章/系统分析，5=长期参考资料。",
-          "阅读价值 1：过时教程、纯广告、无实质内容新闻、低质量项目列表、当前环境无法复用的材料。",
-          "阅读价值 2：浅层功能介绍、营销软文、资讯合集、每个条目只有短介绍的周刊/月刊。",
-          "阅读价值 3：有实操细节的教程，或有观点但深度一般的分析。",
-          "阅读价值 4：有原理解释、工程经验、代码示例或可复现方法的深度文章。",
-          "阅读价值 5：系统性知识、长期参考、可反复查阅的高密度资料。",
-          "推荐动作只能是 skip、skim、deep_learn、keep_reference。",
-          "推荐动作含义：skip=不建议学习；skim=快速阅读即可；deep_learn=值得深入学习并出题；keep_reference=长期保存为参考资料。",
-          `建议目录必须从这些目录中选择：${ARTICLE_CATEGORIES.join("、")}。不确定时选择 ${fallbackCategory}。`,
-          "`briefDescription` 用于写入 Frontmatter 的简要描述，只能是 1 到 2 句文章概括。",
-          "`summary` 用于侧边栏 AI Summary，必须是结构化 Markdown 文本，不要写成和 briefDescription 一样的一段话。",
-          "`summary` 必须包含两个小节：`核心观点` 和 `章节梳理`。",
-          "`核心观点` 使用 2 到 4 条无序列表；`章节梳理` 使用有序列表，逐条说明文章各章节或主要部分讲了什么。",
-          "`summary` 总长度建议 180 到 360 个中文字符，便于右侧栏快速扫描。",
-          "tags 只给主题标签，不要给来源平台标签；不要编造文章没有覆盖的主题。",
-          "tags 必须遵守 Obsidian 标签语法：每个标签内部不允许有空格，多词标签使用连字符连接。"
-        ].join("\n")
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          title,
-          fallbackCategory,
-          article: buildAnalysisExcerpt(content),
-          requiredJsonShape: {
-            briefDescription: "1 到 2 句文章概括，用于 Frontmatter 简要描述",
-            summary: "结构化 Markdown：包含 核心观点 bullet list 和 章节梳理 ordered list",
-            readingValue: "1-5 integer",
-            recommendedAction: "skip | skim | deep_learn | keep_reference",
-            category: ARTICLE_CATEGORIES,
-            reason: "一句话说明阅读价值和推荐动作的理由",
-            tags: ["2-6 个中文或英文主题标签"]
-          }
-        })
-      }
-    ]);
-
-    const normalized = normalizeSummaryResponse(payload, fallbackCategory);
-    return {
-      filePath,
-      title,
-      ...normalized
-    };
+    const payload = await this.requestJson<SummaryResponse>(
+      this.settings.summaryModel,
+      buildSummaryMessages(title, content, fallbackCategory)
+    );
+    return { filePath, title, ...normalizeSummaryResponse(payload, fallbackCategory) };
   }
 
   async summarizeStream(
@@ -124,70 +78,24 @@ export class AiService {
     title: string,
     content: string,
     fallbackCategory: string,
-    onDelta: (fullText: string) => void
+    onDelta: (state: { content: string; reasoning: string }) => void
   ): Promise<NoteSummary> {
-    const messages: ChatRequestMessage[] = [
-      {
-        role: "system",
-        content: [
-          "你是 KnowFlow 的 Obsidian Clipping 分析器。",
-          "必须基于文章语义判断，不允许用文章长度或关键词粗略猜测。",
-          "KnowFlow 的目标不是把所有文章都变成学习材料，而是帮助用户决定是否值得投入学习时间。",
-          "你需要输出严格 JSON，不要输出 markdown。",
-          "阅读价值必须是 1-5 的整数：1=低价值或广告，2=浅层资讯，3=普通教程/观点，4=深入技术文章/系统分析，5=长期参考资料。",
-          "阅读价值 1：过时教程、纯广告、无实质内容新闻、低质量项目列表、当前环境无法复用的材料。",
-          "阅读价值 2：浅层功能介绍、营销软文、资讯合集、每个条目只有短介绍的周刊/月刊。",
-          "阅读价值 3：有实操细节的教程，或有观点但深度一般的分析。",
-          "阅读价值 4：有原理解释、工程经验、代码示例或可复现方法的深度文章。",
-          "阅读价值 5：系统性知识、长期参考、可反复查阅的高密度资料。",
-          "推荐动作只能是 skip、skim、deep_learn、keep_reference。",
-          "推荐动作含义：skip=不建议学习；skim=快速阅读即可；deep_learn=值得深入学习并出题；keep_reference=长期保存为参考资料。",
-          `建议目录必须从这些目录中选择：${ARTICLE_CATEGORIES.join("、")}。不确定时选择 ${fallbackCategory}。`,
-          "`briefDescription` 用于写入 Frontmatter 的简要描述，只能是 1 到 2 句文章概括。",
-          "`summary` 用于侧边栏 AI Summary，必须是结构化 Markdown 文本，不要写成和 briefDescription 一样的一段话。",
-          "`summary` 必须包含两个小节：`核心观点` 和 `章节梳理`。",
-          "`核心观点` 使用 2 到 4 条无序列表；`章节梳理` 使用有序列表，逐条说明文章各章节或主要部分讲了什么。",
-          "`summary` 总长度建议 180 到 360 个中文字符，便于右侧栏快速扫描。",
-          "tags 只给主题标签，不要给来源平台标签；不要编造文章没有覆盖的主题。",
-          "tags 必须遵守 Obsidian 标签语法：每个标签内部不允许有空格，多词标签使用连字符连接。"
-        ].join("\n")
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          title,
-          fallbackCategory,
-          article: buildAnalysisExcerpt(content),
-          requiredJsonShape: {
-            briefDescription: "1 到 2 句文章概括，用于 Frontmatter 简要描述",
-            summary: "结构化 Markdown：包含 核心观点 bullet list 和 章节梳理 ordered list",
-            readingValue: "1-5 integer",
-            recommendedAction: "skip | skim | deep_learn | keep_reference",
-            category: ARTICLE_CATEGORIES,
-            reason: "一句话说明阅读价值和推荐动作的理由",
-            tags: ["2-6 个中文或英文主题标签"]
-          }
-        })
-      }
-    ];
-
     let fullText = "";
-    await this.requestTextStream(this.settings.summaryModel, messages, {
+    let fullReasoning = "";
+    await this.requestTextStream(this.settings.summaryModel, buildSummaryMessages(title, content, fallbackCategory), {
       onContent: (delta) => {
         fullText += delta;
-        onDelta(fullText);
+        onDelta({ content: fullText, reasoning: fullReasoning });
       },
-      onReasoning: () => {},
+      onReasoning: (delta) => {
+        fullReasoning += delta;
+        onDelta({ content: fullText, reasoning: fullReasoning });
+      },
       onUsage: () => {}
     });
 
     const payload = parseJsonResponse<SummaryResponse>(fullText);
-    const normalized = normalizeSummaryResponse(payload, fallbackCategory);
-    return {
-      filePath,
-      title,
-      ...normalized
-    };
+    return { filePath, title, ...normalizeSummaryResponse(payload, fallbackCategory) };
   }
 
   async answerStream(
@@ -481,14 +389,19 @@ export class AiService {
       temperature: 0.2
     };
     if (json) {
-      body.response_format = {
-        type: "json_schema",
-        json_schema: {
-          name: "response",
-          strict: false,
-          schema: { type: "object" }
-        }
-      };
+      // Cloud APIs (openai-compatible) use json_object; local runtimes use json_schema
+      if (config.runtime === "openai-compatible") {
+        body.response_format = { type: "json_object" };
+      } else {
+        body.response_format = {
+          type: "json_schema",
+          json_schema: {
+            name: "response",
+            strict: false,
+            schema: { type: "object" }
+          }
+        };
+      }
     }
 
     const response = await withTimeout(
@@ -702,6 +615,53 @@ function assertModelConfig(config: AiModelConfig): void {
   if (config.runtime === "openai-compatible" && !config.apiKey.trim()) {
     throw new Error("API Key is missing for Cloud runtime.");
   }
+}
+
+function buildSummaryMessages(title: string, content: string, fallbackCategory: string): ChatRequestMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "你是 KnowFlow 的 Obsidian Clipping 分析器。",
+        "必须基于文章语义判断，不允许用文章长度或关键词粗略猜测。",
+        "KnowFlow 的目标不是把所有文章都变成学习材料，而是帮助用户决定是否值得投入学习时间。",
+        "你需要输出严格 JSON，不要输出 markdown。",
+        "阅读价值必须是 1-5 的整数：1=低价值或广告，2=浅层资讯，3=普通教程/观点，4=深入技术文章/系统分析，5=长期参考资料。",
+        "阅读价值 1：过时教程、纯广告、无实质内容新闻、低质量项目列表、当前环境无法复用的材料。",
+        "阅读价值 2：浅层功能介绍、营销软文、资讯合集、每个条目只有短介绍的周刊/月刊。",
+        "阅读价值 3：有实操细节的教程，或有观点但深度一般的分析。",
+        "阅读价值 4：有原理解释、工程经验、代码示例或可复现方法的深度文章。",
+        "阅读价值 5：系统性知识、长期参考、可反复查阅的高密度资料。",
+        "推荐动作只能是 skip、skim、deep_learn、keep_reference。",
+        "推荐动作含义：skip=不建议学习；skim=快速阅读即可；deep_learn=值得深入学习并出题；keep_reference=长期保存为参考资料。",
+        `建议目录必须从这些目录中选择：${ARTICLE_CATEGORIES.join("、")}。不确定时选择 ${fallbackCategory}。`,
+        "`briefDescription` 用于写入 Frontmatter 的简要描述，只能是 1 到 2 句文章概括。",
+        "`summary` 用于侧边栏 AI Summary，必须是结构化 Markdown 文本，不要写成和 briefDescription 一样的一段话。",
+        "`summary` 必须包含两个小节：`核心观点` 和 `章节梳理`。",
+        "`核心观点` 使用 2 到 4 条无序列表；`章节梳理` 使用有序列表，逐条说明文章各章节或主要部分讲了什么。",
+        "`summary` 总长度建议 180 到 360 个中文字符，便于右侧栏快速扫描。",
+        "tags 只给主题标签，不要给来源平台标签；不要编造文章没有覆盖的主题。",
+        "tags 必须遵守 Obsidian 标签语法：每个标签内部不允许有空格，多词标签使用连字符连接。"
+      ].join("\n")
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        title,
+        fallbackCategory,
+        article: buildAnalysisExcerpt(content),
+        requiredJsonShape: {
+          briefDescription: "1 到 2 句文章概括，用于 Frontmatter 简要描述",
+          summary: "结构化 Markdown：包含 核心观点 bullet list 和 章节梳理 ordered list",
+          readingValue: "1-5 integer",
+          recommendedAction: "skip | skim | deep_learn | keep_reference",
+          category: ARTICLE_CATEGORIES,
+          reason: "一句话说明阅读价值和推荐动作的理由",
+          tags: ["2-6 个中文或英文主题标签"]
+        }
+      })
+    }
+  ];
 }
 
 function normalizeSummaryResponse(value: SummaryResponse, fallbackCategory: string): Omit<NoteSummary, "filePath" | "title"> {

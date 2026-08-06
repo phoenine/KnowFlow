@@ -22,6 +22,8 @@ export class KnowFlowSidebarView extends ItemView {
   private activeChatThread: ChatThread | null = null;
   private streamingAnswerEl: HTMLElement | null = null;
   private streamingReasoningEl: HTMLElement | null = null;
+  private streamingSummaryContentEl: HTMLElement | null = null;
+  private streamingSummaryReasoningEl: HTMLElement | null = null;
   private quizSession: QuizSession | null = null;
   private pendingSummaries = new Set<string>();
   private summaryErrors = new Map<string, string>();
@@ -36,6 +38,7 @@ export class KnowFlowSidebarView extends ItemView {
   private summaryTextCache = new WeakMap<TFile, CachedSummaryText>();
   private summaryTextLoads = new WeakMap<TFile, Promise<SummaryText | null>>();
   private streamingSummaryTexts = new Map<string, string>();
+  private streamingSummaryReasonings = new Map<string, string>();
   private clippingSummaryScanPending = false;
 
   constructor(
@@ -126,23 +129,27 @@ export class KnowFlowSidebarView extends ItemView {
     const summaryPending = this.pendingSummaries.has(file.path);
     const summaryError = this.summaryErrors.get(file.path);
     const streamingText = this.streamingSummaryTexts.get(file.path);
+    const streamingReasoning = this.streamingSummaryReasonings.get(file.path);
     const analysisCost = estimateClippingAnalysisTokens(file);
     const pipelineState = this.pipelineStates.get(file.path);
     const persistedPipeline = this.plugin.store.getPipelineStatus(file.path);
+    // 重新生成时不展示旧摘要/指标，避免和流式过程叠在一起。
+    const displaySummary = summaryPending ? null : summary;
     const selectedCategory = this.selectedCategories.get(file.path) ?? summary?.category ?? this.plugin.settings.defaultArticleCategory;
 
     renderClippingView(root, {
       title: file.basename,
-      summary,
+      summary: displaySummary,
       summaryPending,
       summaryError,
       streamingText,
+      streamingReasoning,
       analysisCost,
       pipelineState,
       persistedPipeline,
       selectedCategory,
       statusText: this.getPipelineStatusText(pipelineState, persistedPipeline.status),
-      recommendedActionLabel: summary ? this.recommendedActionLabel(summary.recommendedAction) : "--",
+      recommendedActionLabel: displaySummary ? this.recommendedActionLabel(displaySummary.recommendedAction) : "--",
       renderMarkdownSummary: (parent, markdown) => void this.renderMarkdownSummary(parent, markdown, file.path),
       onRefreshSummary: () => this.ensureClippingSummary(file, true),
       onGenerateSummary: () => this.ensureClippingSummary(file, true),
@@ -158,6 +165,8 @@ export class KnowFlowSidebarView extends ItemView {
       }
     });
 
+    this.streamingSummaryContentEl = root.querySelector(".kf-streaming-text");
+    this.streamingSummaryReasoningEl = root.querySelector(".kf-streaming-reasoning");
     this.renderComposer(root, context, file.basename, file);
   }
 
@@ -166,15 +175,10 @@ export class KnowFlowSidebarView extends ItemView {
     if (!force && await this.readSummaryText(file)) return;
     this.pendingSummaries.add(file.path);
     this.summaryErrors.delete(file.path);
-    this.streamingSummaryTexts.delete(file.path);
+    this.clearStreamingSummary(file.path);
     if (this.plugin.router.getContext().activeFile?.path === file.path) {
       this.render();
     }
-    const scheduleRender = () => debounceByKey(file.path, () => {
-      if (this.plugin.router.getContext().activeFile?.path === file.path) {
-        this.render();
-      }
-    }, 120);
     try {
       const content = await this.app.vault.read(file);
       const summary = await this.plugin.ai.summarizeStream(
@@ -182,12 +186,21 @@ export class KnowFlowSidebarView extends ItemView {
         file.basename,
         content,
         this.plugin.settings.defaultArticleCategory,
-        (fullText) => {
-          this.streamingSummaryTexts.set(file.path, extractVisibleText(fullText));
-          scheduleRender();
+        ({ content: fullText, reasoning }) => {
+          const visible = extractVisibleText(fullText);
+          this.streamingSummaryTexts.set(file.path, visible);
+          this.streamingSummaryReasonings.set(file.path, reasoning);
+          if (this.plugin.router.getContext().activeFile?.path !== file.path) return;
+          const needsContentEl = Boolean(visible) && !this.streamingSummaryContentEl;
+          const needsReasoningEl = Boolean(reasoning) && !this.streamingSummaryReasoningEl;
+          if (needsContentEl || needsReasoningEl) {
+            this.render();
+            return;
+          }
+          if (this.streamingSummaryReasoningEl) this.streamingSummaryReasoningEl.textContent = reasoning;
+          if (this.streamingSummaryContentEl) this.streamingSummaryContentEl.textContent = visible;
         }
       );
-      this.streamingSummaryTexts.delete(file.path);
       await this.plugin.summaryNotes.applySummary(
         file,
         { summary: summary.summary, reason: summary.reason },
@@ -197,20 +210,24 @@ export class KnowFlowSidebarView extends ItemView {
       if (!this.manuallySelectedCategories.has(file.path)) {
         this.selectedCategories.set(file.path, summary.category);
       }
-      if (this.plugin.router.getContext().activeFile?.path === file.path) {
-        this.render();
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.summaryErrors.set(file.path, message);
       new Notice(`KnowFlow summary failed: ${message}`, 8000);
     } finally {
-      this.streamingSummaryTexts.delete(file.path);
+      this.clearStreamingSummary(file.path);
       this.pendingSummaries.delete(file.path);
       if (this.plugin.router.getContext().activeFile?.path === file.path) {
         this.render();
       }
     }
+  }
+
+  private clearStreamingSummary(filePath: string): void {
+    this.streamingSummaryTexts.delete(filePath);
+    this.streamingSummaryReasonings.delete(filePath);
+    this.streamingSummaryContentEl = null;
+    this.streamingSummaryReasoningEl = null;
   }
 
   private renderArticlesOverview(root: HTMLElement, context: ViewContext): void {
@@ -1043,36 +1060,21 @@ function addChatUsage(current: ChatUsage, next: ChatUsage): ChatUsage {
   };
 }
 
-const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function debounceByKey(key: string, fn: () => void, delayMs: number): void {
-  const existing = debounceTimers.get(key);
-  if (existing) clearTimeout(existing);
-  debounceTimers.set(key, setTimeout(() => {
-    debounceTimers.delete(key);
-    fn();
-  }, delayMs));
-}
-
 /**
- * Strips JSON syntax noise from streaming text so the user sees
- * readable markdown, not raw JSON brackets and escaped newlines.
- * Tries to extract the "summary" field first; falls back to showing
- * the raw text with structural characters removed.
+ * During streaming, just strip JSON structural noise so the user sees
+ * text appearing progressively. Don't try to extract specific fields
+ * until the full JSON is complete.
  */
 function extractVisibleText(raw: string): string {
   if (!raw) return "";
-  const summaryMatch = /"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(raw);
-  if (summaryMatch) {
-    return summaryMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, "\"");
-  }
   return raw
-    .replace(/^```(?:json)?\s*/, "")
-    .replace(/\s*```$/, "")
-    .replace(/[{}\[\]]/g, "")
-    .replace(/"\w+":\s*/g, "")
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/[{}\[\]]/g, "\n")
+    .replace(/"\w+":\s*"/g, "")
+    .replace(/",?\s*$/gm, "")
     .replace(/\\n/g, "\n")
     .replace(/\\"/g, "\"")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 

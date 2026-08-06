@@ -20,6 +20,7 @@ interface ClippingViewProps {
   summaryPending: boolean;
   summaryError: string | undefined;
   streamingText?: string;
+  streamingReasoning?: string;
   analysisCost: number;
   pipelineState: PipelineUiState | undefined;
   persistedPipeline: PipelineStatus;
@@ -76,10 +77,42 @@ function renderSummaryCard(content: HTMLElement, props: ClippingViewProps): void
       { duration: 900, iterations: Infinity }
     );
   }
-  if (props.summary) {
+  if (props.summary && !props.summaryPending) {
     props.renderMarkdownSummary(summary, `${props.summary.summary}${props.summary.reason ? `\n\n> ${props.summary.reason}` : ""}`);
-  } else if (props.summaryPending && props.streamingText) {
-    props.renderMarkdownSummary(summary, props.streamingText);
+  } else if (props.summaryPending && (props.streamingText || props.streamingReasoning)) {
+    // 流式用纯文本，避免 MarkdownRenderer 每帧重绘；reasoning 默认折叠，可选手动展开。
+    if (props.streamingReasoning) {
+      const details = summary.createEl("details", { cls: "kf-streaming-reasoning-wrap" });
+      details.open = false;
+      setStyles(details, { marginBottom: "8px" });
+      const label = details.createEl("summary", { text: "思考过程" });
+      setStyles(label, { color: "var(--text-muted)", cursor: "pointer", fontSize: "12px" });
+      const reasoningEl = details.createDiv({ cls: "kf-streaming-reasoning" });
+      setStyles(reasoningEl, {
+        color: "var(--text-muted)",
+        fontSize: "12px",
+        lineHeight: "1.5",
+        marginTop: "7px",
+        maxHeight: "220px",
+        overflow: "auto",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word"
+      });
+      reasoningEl.setText(props.streamingReasoning);
+    }
+    if (props.streamingText) {
+      const streamEl = summary.createDiv({ cls: "kf-streaming-text" });
+      setStyles(streamEl, {
+        color: "var(--text-muted)",
+        fontSize: "13px",
+        lineHeight: "1.5",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word"
+      });
+      streamEl.setText(props.streamingText);
+    } else {
+      text(summary, "正在生成摘要…", "kf-muted");
+    }
   } else {
     text(
       summary,
