@@ -233,7 +233,12 @@ export class AiService {
             role: "user",
             content: JSON.stringify({
               title,
-              candidates: batch.map(({ id, content, before, after }) => ({ id, content, before, after })),
+              candidates: batch.map(({ id, content, analysisContent, before, after }) => ({
+                id,
+                content: analysisContent ?? content,
+                before,
+                after
+              })),
               requiredJsonShape: {
                 decisions: [{ id: "候选 id", action: "keep | heading", level: "仅 heading：2 | 3 | 4" }]
               }

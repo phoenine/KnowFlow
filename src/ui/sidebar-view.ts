@@ -613,6 +613,7 @@ export class KnowFlowSidebarView extends ItemView {
     this.pipelineStates.set(file.path, {
       completed: [],
       skipped: [],
+      stepInfo: {},
       currentStep: null,
       error: null,
       failedStep: null,
@@ -621,9 +622,10 @@ export class KnowFlowSidebarView extends ItemView {
     });
     this.render();
     try {
-      await this.plugin.pipeline.process(file, (step, status) => {
+      await this.plugin.pipeline.process(file, (step, status, info) => {
         const state = this.pipelineStates.get(file.path);
         if (!state) return;
+        if (info) state.stepInfo[step] = info;
         if (status === "active") {
           if (state.currentStep && state.currentStep !== step && !state.completed.includes(state.currentStep)) {
             state.completed.push(state.currentStep);

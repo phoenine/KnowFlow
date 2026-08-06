@@ -17,6 +17,7 @@ const {
   applyFormattingDecisions,
   batchFormattingCandidates,
   collectFormattingCandidates,
+  collectHeadingCandidates,
   stripSequentialLineNumbers
 } = await import(pathToFileURL(join(tempDir, "formatting-candidates.js")).href);
 
@@ -35,6 +36,33 @@ const {
     { id: heading.id, action: "heading", level: 2 }
   ]);
   assert.ok(formatted.includes("## 产品经理不该按人头配齐"));
+}
+
+{
+  const article = [
+    "上一段正文。",
+    "",
+    "**人可以懒到什么地步**",
+    "",
+    "这里解释全自动工作流。"
+  ].join("\n");
+  const candidates = collectHeadingCandidates(article);
+  const heading = candidates.find((candidate) => candidate.type === "possible-heading");
+  assert.ok(heading);
+  assert.equal(heading.content, "**人可以懒到什么地步**");
+  assert.equal(heading.analysisContent, "人可以懒到什么地步");
+
+  const formatted = applyFormattingDecisions(article, candidates, [
+    { id: heading.id, action: "heading", level: 2 }
+  ]);
+  assert.ok(formatted.includes("## 人可以懒到什么地步"));
+
+  const changedArticle = article.replace("**人可以懒到什么地步**", "**已被用户修改**");
+  assert.equal(
+    applyFormattingDecisions(changedArticle, candidates, [{ id: heading.id, action: "heading", level: 2 }]),
+    changedArticle,
+    "stale heading candidates must not modify changed source"
+  );
 }
 
 {

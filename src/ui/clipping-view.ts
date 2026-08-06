@@ -274,6 +274,22 @@ function renderPipelineProgress(parent: HTMLElement, state: PipelineUiState): vo
       flex: "0 0 auto"
     });
     text(left, step, "kf-step");
+    const info = state.stepInfo[step];
+    if (info) {
+      const infoIcon = left.createSpan({
+        cls: "kf-pipeline-step-info",
+        attr: { "aria-label": info }
+      });
+      setIcon(infoIcon, "info");
+      setStyles(infoIcon, {
+        color: "var(--text-muted)",
+        cursor: "help",
+        display: "inline-flex",
+        flex: "0 0 auto"
+      });
+      const svg = infoIcon.querySelector<SVGSVGElement>("svg");
+      if (svg) Object.assign(svg.style, { height: "13px", width: "13px" });
+    }
     const status = item.createDiv({
       text: failed ? "失败" : done ? "完成" : skipped ? "跳过" : active ? "进行中" : "等待"
     });

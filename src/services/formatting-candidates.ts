@@ -5,7 +5,10 @@ export interface FormattingCandidate {
   type: FormattingCandidateType;
   startLine: number;
   endLine: number;
+  /** Exact source text used for stale-write protection. */
   content: string;
+  /** Clean text presented to the LLM when it differs from the source. */
+  analysisContent?: string;
   before: string;
   after: string;
   /** For HIGH-confidence code: the language to auto-apply, skipping LLM */
@@ -112,7 +115,9 @@ export function batchFormattingCandidates(candidates: FormattingCandidate[]): Fo
   let chars = 0;
 
   for (const candidate of candidates) {
-    const candidateChars = candidate.content.length + candidate.before.length + candidate.after.length;
+    const candidateChars = (candidate.analysisContent ?? candidate.content).length
+      + candidate.before.length
+      + candidate.after.length;
     if (batch.length > 0 && chars + candidateChars > FORMATTING_BATCH_CHARS) {
       batches.push(batch);
       batch = [];
@@ -324,14 +329,16 @@ export function collectHeadingCandidates(content: string): FormattingCandidate[]
       index = range.end + 1;
       continue;
     }
-    candidates.push(makeCandidate(
+    const candidate = makeCandidate(
       candidates.length,
       "possible-heading",
       range.start,
       range.end,
-      normalized,
+      rawContent,
       lines
-    ));
+    );
+    candidate.analysisContent = normalized;
+    candidates.push(candidate);
     index = range.end + 1;
   }
   return candidates;

@@ -33,6 +33,8 @@ export function applyArticleFrontmatter(content: string, originalContent: string
   const fields = new Map<string, string | string[]>();
 
   fields.set("创建日期", normalizeCreationDate(getFieldValue(frontmatter, "创建日期"), data.today));
+  const author = getFieldValue(frontmatter, "文章作者");
+  if (author !== undefined) fields.set("文章作者", normalizeAuthor(author));
   // 简要描述/阅读价值/分类/tags are deliberately NOT set here — they're owned
   // by applySummaryFrontmatter below, called the moment a summary is
   // generated. Re-running the pipeline just leaves whatever's already
@@ -203,6 +205,18 @@ function normalizeCreationDate(value: string | undefined, today: string): string
   const trimmed = value?.trim() ?? "";
   if (!trimmed || trimmed.includes("<%")) return today;
   return trimmed;
+}
+
+function normalizeAuthor(value: string): string {
+  const trimmed = value.trim();
+  const scalar = (
+    (trimmed.startsWith("\"") && trimmed.endsWith("\""))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  )
+    ? trimmed.slice(1, -1).trim()
+    : trimmed;
+  const wikilink = /^\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]$/.exec(scalar);
+  return wikilink ? (wikilink[2] ?? wikilink[1]).trim() : trimmed;
 }
 
 /**

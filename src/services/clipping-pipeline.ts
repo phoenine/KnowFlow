@@ -51,13 +51,14 @@ export class ClippingPipeline {
 
   async process(
     file: TFile,
-    onProgress?: (step: string, status: "active" | "completed" | "skipped") => void
+    onProgress?: (step: string, status: "active" | "completed" | "skipped", info?: string) => void
   ): Promise<void> {
     const report = async (
       step: string,
-      status: "active" | "completed" | "skipped" = "active"
+      status: "active" | "completed" | "skipped" = "active",
+      info?: string
     ): Promise<void> => {
-      onProgress?.(step, status);
+      onProgress?.(step, status, info);
       await Promise.resolve();
     };
 
@@ -116,11 +117,19 @@ export class ClippingPipeline {
       }
 
       // Phase 4: 标题 LLM（放在代码整理之后，候选质量更高）
-      await report("AI 判断标题");
       const headingCandidates = collectHeadingCandidates(formatted);
       if (headingCandidates.length > 0) {
+        await report("AI 判断标题");
         const headingDecisions = await this.ai.analyzeHeadingCandidates(title, headingCandidates);
         formatted = applyFormattingDecisions(formatted, headingCandidates, headingDecisions);
+        const converted = headingDecisions.filter((decision) => decision.action === "heading").length;
+        await report(
+          "AI 判断标题",
+          "completed",
+          `发现 ${headingCandidates.length} 个候选；转换 ${converted} 个标题；保留 ${headingCandidates.length - converted} 个`
+        );
+      } else {
+        await report("AI 判断标题", "skipped");
       }
       formatted = this.normalizeHeadingLevels(formatted);
 

@@ -96,6 +96,7 @@ export interface PipelineStatus {
 export interface PipelineUiState {
   completed: string[];
   skipped: string[];
+  stepInfo: Record<string, string>;
   currentStep: string | null;
   error: string | null;
   failedStep: string | null;

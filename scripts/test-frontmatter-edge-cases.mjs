@@ -54,6 +54,28 @@ const baseData = { title: "标题", today: "2026-08-04" };
   assert.ok(!result.includes("\r"), "output should be normalized to \\n only");
 }
 
+// A single wikilink in 文章作者 is metadata decoration from the clipper,
+// not an intended Obsidian relation. Normalize it to a plain author name.
+{
+  const original = [
+    "---",
+    "文章作者: \"[[Mars任鑫]]\"",
+    "状态: false",
+    "---",
+    "正文"
+  ].join("\n");
+  const result = applyArticleFrontmatter("正文", original, "", baseData);
+  assert.ok(result.includes("文章作者: Mars任鑫"));
+  assert.ok(!result.includes("[[Mars任鑫]]"));
+}
+
+// Ordinary author values are outside this normalization and must round-trip.
+{
+  const original = "---\n文章作者: Mars任鑫\n---\n正文";
+  const result = applyArticleFrontmatter("正文", original, "", baseData);
+  assert.ok(result.includes("文章作者: Mars任鑫"));
+}
+
 // Tab-indented continuation lines under a block field must still be treated
 // as part of that field's value, not mistaken for a new top-level key.
 {
