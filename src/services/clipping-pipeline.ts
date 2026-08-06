@@ -212,7 +212,11 @@ export class ClippingPipeline {
       next = next.replace(/^(#{1,6}\s+.*?)\s*\*\*\s*$/g, "$1");
       // Clean pure-number heading noise: "## 1. 01" → "## "
       next = next.replace(/^(#{1,6})\s+\d+[.\、\)]\s*\d*\s*$/g, "$1 ");
+      // Strip redundant Chinese numbering after heading prefix: "## 1. 一、xxx" → "## 1. xxx"
+      next = next.replace(/^(#{1,6}\s+\d+[.\、\)]\s*)[一二三四五六七八九十]+[、.]\s*/g, "$1");
       next = next.replace(/^(\s*)(\d+)[、)]\s+/g, "$1$2. ");
+      next = next.replace(/^(\s*)([一二三四五六七八九十]+)([、.])\s+/g, (_m, sp, num, sep) =>
+        `${sp}${chineseToArabic(num)}. `);
       next = next.replace(/^\s+\|(\s*:?-{3,}:?\s*\|.*)$/g, "|$1");
       return next;
     });
@@ -345,4 +349,20 @@ function normalizeCodeLanguage(rawLang: string, body: string): string {
   if (/^(select|with|insert|update|delete|create table)\b/im.test(sample)) return "sql";
   if (/^<[\w!?]/.test(sample)) return "html";
   return lang || "";
+}
+
+const CHINESE_DIGITS: Record<string, number> = {
+  "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+  "六": 6, "七": 7, "八": 8, "九": 9, "十": 10
+};
+
+function chineseToArabic(chinese: string): string {
+  if (chinese === "十") return "10";
+  if (chinese.startsWith("十")) return String(10 + (CHINESE_DIGITS[chinese[1]] ?? 0));
+  if (chinese.endsWith("十")) return String((CHINESE_DIGITS[chinese[0]] ?? 0) * 10);
+  if (chinese.includes("十")) {
+    const [tens, ones] = chinese.split("十");
+    return String((CHINESE_DIGITS[tens] ?? 0) * 10 + (CHINESE_DIGITS[ones] ?? 0));
+  }
+  return String(CHINESE_DIGITS[chinese] ?? chinese);
 }
