@@ -2,8 +2,6 @@ import { Notice, TFile, normalizePath } from "obsidian";
 import type { App } from "obsidian";
 import type { KnowFlowSettings } from "../types";
 import type { AiService } from "./ai-service";
-import { parseBlocks, getParagraphBlocks, getCodeBlocks, type MarkdownBlock } from "./block-parser";
-import { assessUnfencedCode, wrapCodeFence } from "./code-confidence";
 import { removeCodeWatermarkLines } from "./cleanup-rules";
 import {
   applyFormattingDecisions,
@@ -11,7 +9,8 @@ import {
   collectCodeCandidates,
   collectHeadingCandidates,
   normalizeOrphanBoldTriplet,
-  stripSequentialLineNumbers
+  stripSequentialLineNumbers,
+  type FormattingCandidate
 } from "./formatting-candidates";
 import { applyArticleFrontmatter, updateFrontmatterCategory } from "./frontmatter-rules";
 import { validateMarkdownIntegrity } from "./repair-validator";
@@ -65,30 +64,36 @@ export class ClippingPipeline {
       // Phase 1: 规则清理
       formatted = normalizeOrphanBoldTriplet(formatted);
       formatted = this.organizeMarkdownStyle(formatted);
-      const blocks = parseBlocks(formatted);
 
       // Phase 2: 代码格式化（规则，先跑，把代码块结构定下来）
       await report("格式化代码块");
       formatted = this.formatCodeBlocks(formatted);
 
-      // Phase 3: 代码 LLM（MEDIUM + fenced-code，并行）
+      // Phase 3: 代码收集（置信度分级）→ HIGH 自动包围栏 / MEDIUM 送 LLM
       const codeResult = collectCodeCandidates(formatted);
-      const hasPossibleCode = codeResult.possibleCode.length > 0;
+      const highConfidence = codeResult.possibleCode.filter((c) => c.autoLanguage);
+      const mediumConfidence = codeResult.possibleCode.filter((c) => !c.autoLanguage);
+      const hasMediumCode = mediumConfidence.length > 0;
       const hasFencedCode = codeResult.fencedCode.length > 0;
 
-      if (hasPossibleCode || hasFencedCode) {
-        const codeLabel = hasPossibleCode ? "AI 判断未围栏代码" : "AI 判断代码语言";
+      // HIGH: 直接包围栏，不走 LLM
+      if (highConfidence.length > 0) {
+        formatted = this.applyAutoCodeWraps(formatted, highConfidence);
+      }
+
+      if (hasMediumCode || hasFencedCode) {
+        const codeLabel = hasMediumCode ? "AI 判断未围栏代码" : "AI 判断代码语言";
         await report(codeLabel);
         const [codeDecisions, fencedDecisions] = await Promise.all([
-          hasPossibleCode
-            ? this.ai.analyzePossibleCodeCandidates(title, codeResult.possibleCode)
+          hasMediumCode
+            ? this.ai.analyzePossibleCodeCandidates(title, mediumConfidence)
             : Promise.resolve([]),
           hasFencedCode
             ? this.ai.analyzeFencedCodeCandidates(title, codeResult.fencedCode)
             : Promise.resolve([])
         ]);
-        if (hasPossibleCode) {
-          formatted = applyFormattingDecisions(formatted, codeResult.possibleCode, codeDecisions);
+        if (hasMediumCode) {
+          formatted = applyFormattingDecisions(formatted, mediumConfidence, codeDecisions);
         }
         if (hasFencedCode) {
           formatted = applyFormattingDecisions(formatted, codeResult.fencedCode, fencedDecisions);
@@ -98,10 +103,7 @@ export class ClippingPipeline {
         await report("AI 判断代码语言");
       }
 
-      // Phase 4: HIGH 置信度代码直接包围栏（无 LLM，基于 Block Parser 输出）
-      formatted = this.applyHighConfidenceCodeWraps(formatted, blocks);
-
-      // Phase 5: 标题 LLM（放在代码整理之后，候选质量更高）
+      // Phase 4: 标题 LLM（放在代码整理之后，候选质量更高）
       await report("AI 判断标题");
       const headingCandidates = collectHeadingCandidates(formatted);
       if (headingCandidates.length > 0) {
@@ -234,29 +236,25 @@ export class ClippingPipeline {
     });
   }
 
-  private applyHighConfidenceCodeWraps(content: string, blocks: MarkdownBlock[]): string {
+  /** Auto-wrap HIGH-confidence code candidates with their detected language fence. */
+  private applyAutoCodeWraps(content: string, candidates: FormattingCandidate[]): string {
     const lines = content.split("\n");
-    // Process bottom-up to preserve line numbers
-    const paragraphBlocks = getParagraphBlocks(blocks)
-      .filter((b) => b.parentType !== "callout" && b.parentType !== "code");
-
-    for (let i = paragraphBlocks.length - 1; i >= 0; i--) {
-      const block = paragraphBlocks[i];
-      const prevLine = block.startLine > 0 ? (lines[block.startLine - 1]?.trim() ?? "") : "";
-      const assessment = assessUnfencedCode(block.lines, prevLine);
-
-      if (assessment.confidence === "high" && assessment.suggestedLanguage) {
-        const wrapped = wrapCodeFence(block.lines, assessment.suggestedLanguage);
-        lines.splice(block.startLine, block.endLine - block.startLine + 1, ...wrapped);
-      }
+    // Process bottom-up
+    const sorted = [...candidates].sort((a, b) => b.startLine - a.startLine);
+    for (const candidate of sorted) {
+      if (!candidate.autoLanguage) continue;
+      const current = lines.slice(candidate.startLine, candidate.endLine + 1).join("\n");
+      if (current !== candidate.content) continue;
+      lines.splice(candidate.startLine, candidate.endLine - candidate.startLine + 1,
+        `\`\`\`${candidate.autoLanguage}`, current, "```");
     }
     return lines.join("\n");
   }
 
   /**
-   * If the shallowest heading in the article is H3 or deeper, promote all
-   * headings by one level (###→##, ####→###, etc.), capped at H2 minimum.
-   * The article title itself is the implicit H1.
+   * Normalize heading levels so the shallowest body heading is H2.
+   * Article title is the implicit H1 — body headings must start at ##.
+   * # → ## (demote), ### → ## (promote), H2 → unchanged.
    */
   private normalizeHeadingLevels(content: string): string {
     const lines = content.split("\n");
@@ -265,14 +263,14 @@ export class ClippingPipeline {
       const match = /^(#{1,6})\s/.exec(line);
       if (match) minLevel = Math.min(minLevel, match[1].length);
     }
-    // H2 or shallower — already correct
-    if (minLevel <= 2) return content;
-    // Promote by (minLevel - 2) levels so shallowest becomes H2
+    // Already H2 — no shift needed
+    if (minLevel === 2) return content;
+    // shift > 0: promote (H3+ → H2+); shift < 0: demote (H1 → H2+)
     const shift = minLevel - 2;
     return lines.map((line) => {
       const match = /^(#{1,6})\s/.exec(line);
       if (!match) return line;
-      const newLevel = Math.max(2, match[1].length - shift);
+      const newLevel = Math.max(2, Math.min(6, match[1].length - shift));
       return `${"#".repeat(newLevel)}${line.slice(match[1].length)}`;
     }).join("\n");
   }

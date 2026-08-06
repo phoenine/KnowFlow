@@ -8,6 +8,8 @@ export interface FormattingCandidate {
   content: string;
   before: string;
   after: string;
+  /** For HIGH-confidence code: the language to auto-apply, skipping LLM */
+  autoLanguage?: string;
 }
 
 export interface FormattingDecision {
@@ -16,6 +18,8 @@ export interface FormattingDecision {
   level?: number;
   language?: string;
 }
+
+import { assessUnfencedCode } from "./code-confidence";
 
 const FORMATTING_BATCH_CHARS = 16000;
 
@@ -387,10 +391,20 @@ export function collectCodeCandidates(content: string): {
     }
     const end = index;
     const block = lines.slice(start, end + 1);
-    if (looksLikeUnfencedCode(block, lines[start - 1] ?? "")) {
+    const prevLine = lines[start - 1]?.trim() ?? "";
+    const assessment = assessUnfencedCode(block, prevLine);
+
+    if (assessment.confidence === "high" && assessment.suggestedLanguage) {
+      // HIGH: mark for auto-wrap in the pipeline
+      const candidate = makeCandidate(possibleCode.length, "possible-code", start, end, block.join("\n"), lines);
+      candidate.autoLanguage = assessment.suggestedLanguage;
+      possibleCode.push(candidate);
+    } else if (assessment.confidence === "medium") {
+      // MEDIUM: send to LLM
       possibleCode.push(makeCandidate(possibleCode.length, "possible-code", start, end, block.join("\n"), lines));
-      for (let j = start; j <= end; j += 1) occupied.add(j);
     }
+    // UNKNOWN: skip — not code-like enough
+    for (let j = start; j <= end; j += 1) occupied.add(j);
     index += 1;
   }
 
