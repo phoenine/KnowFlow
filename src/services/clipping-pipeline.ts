@@ -2,14 +2,19 @@ import { Notice, TFile, normalizePath } from "obsidian";
 import type { App } from "obsidian";
 import type { KnowFlowSettings } from "../types";
 import type { AiService } from "./ai-service";
+import { parseBlocks, getParagraphBlocks, getCodeBlocks, type MarkdownBlock } from "./block-parser";
+import { assessUnfencedCode, wrapCodeFence } from "./code-confidence";
 import { removeCodeWatermarkLines } from "./cleanup-rules";
 import {
   applyFormattingDecisions,
+  cleanHeadingNumberNoise,
   collectCodeCandidates,
   collectHeadingCandidates,
+  normalizeOrphanBoldTriplet,
   stripSequentialLineNumbers
 } from "./formatting-candidates";
 import { applyArticleFrontmatter, updateFrontmatterCategory } from "./frontmatter-rules";
+import { validateMarkdownIntegrity } from "./repair-validator";
 import { KnowledgeStore } from "./store";
 import {
   applyTranslationDecisions,
@@ -57,33 +62,73 @@ export class ClippingPipeline {
       let formatted = this.stripFrontmatterBody(original);
       this.assertReadableBody(formatted);
 
+      // Phase 1: Block Parser + 规则清理
+      formatted = normalizeOrphanBoldTriplet(formatted);
       formatted = this.organizeMarkdownStyle(formatted);
+      const blocks = parseBlocks(formatted);
+
+      // Phase 2: 标题 LLM（只从 paragraph 块收集候选）
       await report("AI 判断标题");
       const headingCandidates = collectHeadingCandidates(formatted);
-      const headingDecisions = await this.ai.analyzeHeadingCandidates(title, headingCandidates);
-      formatted = applyFormattingDecisions(formatted, headingCandidates, headingDecisions);
+      if (headingCandidates.length > 0) {
+        const headingDecisions = await this.ai.analyzeHeadingCandidates(title, headingCandidates);
+        formatted = applyFormattingDecisions(formatted, headingCandidates, headingDecisions);
+      }
+
+      // Phase 3: 代码格式化（规则 + HIGH 置信直接包围栏）
       await report("格式化代码块");
       formatted = this.formatCodeBlocks(formatted);
-      await report("AI 判断未围栏代码");
+
+      // Phase 4: 代码 LLM（MEDIUM + fenced-code，并行）
       const codeResult = collectCodeCandidates(formatted);
-      const codeDecisions = await this.ai.analyzePossibleCodeCandidates(title, codeResult.possibleCode);
-      formatted = applyFormattingDecisions(formatted, codeResult.possibleCode, codeDecisions);
-      await report("AI 判断代码语言");
-      const fencedDecisions = await this.ai.analyzeFencedCodeCandidates(title, codeResult.fencedCode);
-      formatted = applyFormattingDecisions(formatted, codeResult.fencedCode, fencedDecisions);
+      const hasPossibleCode = codeResult.possibleCode.length > 0;
+      const hasFencedCode = codeResult.fencedCode.length > 0;
+
+      if (hasPossibleCode || hasFencedCode) {
+        const codeLabel = hasPossibleCode ? "AI 判断未围栏代码" : "AI 判断代码语言";
+        await report(codeLabel);
+        const [codeDecisions, fencedDecisions] = await Promise.all([
+          hasPossibleCode
+            ? this.ai.analyzePossibleCodeCandidates(title, codeResult.possibleCode)
+            : Promise.resolve([]),
+          hasFencedCode
+            ? this.ai.analyzeFencedCodeCandidates(title, codeResult.fencedCode)
+            : Promise.resolve([])
+        ]);
+        if (hasPossibleCode) {
+          formatted = applyFormattingDecisions(formatted, codeResult.possibleCode, codeDecisions);
+        }
+        if (hasFencedCode) {
+          formatted = applyFormattingDecisions(formatted, codeResult.fencedCode, fencedDecisions);
+        }
+      }
+
+      // Phase 5: HIGH 置信度代码直接包围栏（无 LLM）
+      formatted = this.applyHighConfidenceCodeWraps(formatted, blocks);
+
+      // Phase 6: 英文翻译
       await report("英文翻译（可选）");
       if (this.settings.translateEnglishClippings && isPredominantlyEnglishArticle(formatted)) {
         const translationCandidates = collectTranslationCandidates(formatted);
         const translations = await this.ai.translateEnglishParagraphs(title, translationCandidates);
         formatted = applyTranslationDecisions(formatted, translationCandidates, translations);
       }
-      const normalized = this.normalizeFinalBody(formatted);
+
+      // Phase 7: 验证 + 写入
       await report("补全 Frontmatter");
+      const normalized = this.normalizeFinalBody(formatted);
       const withFrontmatter = await this.applyFrontmatter(normalized, original, { title });
 
-      if (await this.app.vault.read(file) !== original) {
-        throw new Error("文章在整理期间发生了修改，请重新执行。");
+      const current = await this.app.vault.read(file);
+      if (current !== original) {
+        throw new Error("文章在修复期间被用户修改，请重新执行。");
       }
+
+      const integrity = validateMarkdownIntegrity(withFrontmatter);
+      if (!integrity.valid) {
+        throw new Error(`修复后 Markdown 结构异常：${integrity.error}`);
+      }
+
       await this.app.vault.modify(file, withFrontmatter);
 
       await this.store.recordPipelineSuccess({
@@ -157,6 +202,7 @@ export class ClippingPipeline {
         .replace(/\*\*(.+?)\*\*\*\*/g, "**$1**")
         .replace(/\*\*\*\*(.+?)\*\*/g, "**$1**")
         .replace(/[ \t]+$/g, "");
+      next = next.replace(/^(#{1,6})\s+\d+[.\、\)]\s*\d+$/g, "$1 ");
       next = next.replace(/^(\s*)(\d+)[、)]\s+/g, "$1$2. ");
       next = next.replace(/^\s+\|(\s*:?-{3,}:?\s*\|.*)$/g, "|$1");
       return next;
@@ -173,6 +219,25 @@ export class ClippingPipeline {
       const lang = normalizeCodeLanguage(rawLang, body);
       return `\`\`\`${lang}\n${body.trim()}\n\`\`\``;
     });
+  }
+
+  private applyHighConfidenceCodeWraps(content: string, blocks: MarkdownBlock[]): string {
+    const lines = content.split("\n");
+    // Process bottom-up to preserve line numbers
+    const paragraphBlocks = getParagraphBlocks(blocks)
+      .filter((b) => b.parentType !== "callout" && b.parentType !== "code");
+
+    for (let i = paragraphBlocks.length - 1; i >= 0; i--) {
+      const block = paragraphBlocks[i];
+      const prevLine = block.startLine > 0 ? (lines[block.startLine - 1]?.trim() ?? "") : "";
+      const assessment = assessUnfencedCode(block.lines, prevLine);
+
+      if (assessment.confidence === "high" && assessment.suggestedLanguage) {
+        const wrapped = wrapCodeFence(block.lines, assessment.suggestedLanguage);
+        lines.splice(block.startLine, block.endLine - block.startLine + 1, ...wrapped);
+      }
+    }
+    return lines.join("\n");
   }
 
   private normalizeFinalBody(content: string): string {

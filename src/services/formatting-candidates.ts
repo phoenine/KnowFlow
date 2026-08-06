@@ -242,13 +242,27 @@ function isPossibleHeadingStart(lines: string[], index: number): boolean {
   const line = lines[index].trim();
   if (!line || line.length > 70 || isProtectedMarkdownLine(line)) return false;
   if (/^https?:\/\//i.test(line) || /[。！？；;]$/.test(line)) return false;
+
   const blankBefore = index === 0 || !lines[index - 1].trim();
   const blankAfter = index === lines.length - 1 || !lines[index + 1].trim();
+
+  // 相邻短行合并为 multi-line 候选
+  if (blankBefore && !blankAfter) {
+    const next = lines[index + 1].trim();
+    if (next && next.length <= 70 && !isProtectedMarkdownLine(lines[index + 1])
+        && !/[。！？；;]$/.test(next) && !/^https?:\/\//i.test(next)) {
+      const afterNext = index + 2 >= lines.length || !lines[index + 2].trim();
+      if (afterNext) return true;
+    }
+  }
+
   return blankBefore && blankAfter;
 }
 
 function possibleHeadingRange(lines: string[], index: number): { start: number; end: number } {
   const current = lines[index].trim();
+
+  // 数字前缀格式（如 "1. 标题" 或 "一、" 的变形）
   if (/^\d{1,2}[.)、]?$/.test(current)) {
     let next = index + 1;
     while (next < lines.length && !lines[next].trim()) next += 1;
@@ -256,6 +270,18 @@ function possibleHeadingRange(lines: string[], index: number): { start: number; 
       return { start: index, end: next };
     }
   }
+
+  // 相邻双行短文本合并
+  const blankAfter = index === lines.length - 1 || !lines[index + 1].trim();
+  if (!blankAfter) {
+    const nextLine = lines[index + 1].trim();
+    if (nextLine && nextLine.length <= 70 && !isProtectedMarkdownLine(lines[index + 1])
+        && !/[。！？；;]$/.test(nextLine) && !/^https?:\/\//i.test(nextLine)) {
+      const afterNext = index + 2 >= lines.length || !lines[index + 2].trim();
+      if (afterNext) return { start: index, end: index + 1 };
+    }
+  }
+
   return { start: index, end: index };
 }
 
@@ -357,4 +383,26 @@ export function collectPossibleCodeCandidates(content: string): FormattingCandid
 
 export function collectFencedCodeCandidates(content: string): FormattingCandidate[] {
   return collectCodeCandidates(content).fencedCode;
+}
+
+/**
+ * Fix the orphan bold triplet pattern:
+ *   **\n**text**\n**  →  **text**
+ * Common in clippings where bold-delimited headings get split across lines.
+ */
+export function normalizeOrphanBoldTriplet(content: string): string {
+  return content.replace(
+    /(^|\n)\*\*[ \t]*\n+(\*\*.+?\*\*)[ \t]*\n+\*\*[ \t]*(?=\n|$)/g,
+    "$1$2"
+  );
+}
+
+/**
+ * Clean pure-number noise from existing heading markers.
+ * Only removes numbering when the entire content after the marker is digits:
+ *   "## 1. 01" → "## "    (all digits ✓)
+ *   "## 1. 概述" → kept    (has text ✗)
+ */
+export function cleanHeadingNumberNoise(line: string): string {
+  return line.replace(/^(#{1,6})\s+\d+[.\、\)]\s*\d+$/g, "$1 ");
 }
