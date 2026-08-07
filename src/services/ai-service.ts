@@ -2,7 +2,7 @@ import { requestUrl } from "obsidian";
 import type { AiModelConfig, ChatMessage as StoredChatMessage, ChatUsage, KnowFlowSettings, NoteSummary, QuizQuestion } from "../types";
 import { estimateChatUsage, parseChatStreamData } from "./chat-stream";
 import { ARTICLE_CATEGORIES } from "./clipping-pipeline";
-import { batchFormattingCandidates } from "./formatting-candidates";
+import { batchFormattingCandidates, preferTextLanguage } from "./formatting-candidates";
 import type { FormattingCandidate, FormattingDecision } from "./formatting-candidates";
 import { batchQuizSections, getQuizFocusTargets, getQuizQuestionLimit, prepareQuizSections } from "./quiz-generation";
 import type { QuizFocusType, QuizSourceSection } from "./quiz-generation";
@@ -268,6 +268,8 @@ export class AiService {
             content: (this.skillText ? `${this.skillText}\n\n` : "") + [
               "你是 KnowFlow 的代码块分类器。只判断候选文本是否为未围栏代码（无 ``` 包裹）。",
               "确认为代码时返回 wrap-code + 语言标识（如 python/typescript/bash）。",
+              "语言不确认时用 text；Markdown 片段用 markdown。禁止猜测编程语言。",
+              "流程示意、箭头链、纯中文说明、非代码文本 → keep（不要 wrap-code）。",
               "不是代码时返回 keep。",
               "要求输出严格 JSON。"
             ].join("\n")
@@ -278,7 +280,7 @@ export class AiService {
               title,
               candidates: batch.map(({ id, content, before, after }) => ({ id, content, before, after })),
               requiredJsonShape: {
-                decisions: [{ id: "候选 id", action: "keep | wrap-code", language: "仅 wrap-code：编程语言" }]
+                decisions: [{ id: "候选 id", action: "keep | wrap-code", language: "仅 wrap-code：编程语言或 text/markdown" }]
               }
             })
           }
@@ -304,9 +306,14 @@ export class AiService {
           {
             role: "system",
             content: (this.skillText ? `${this.skillText}\n\n` : "") + [
-              "你是 KnowFlow 的代码语言分类器。只判断已有围栏（```）包裹的代码块的语言标识。",
-              "返回 set-code-language + 准确语言（如 python/javascript/sql）。",
-              "无法判断时返回 keep。",
+              "你是 KnowFlow 的代码围栏修复器。处理已有 ``` 包裹的代码块。",
+              "语言规则：能明确识别则返回准确语言（python/javascript/bash/sql/yaml 等）；",
+              "不确认时用 text；Markdown 片段用 markdown。禁止猜测编程语言。",
+              "流程示意、箭头链、纯中文说明 → language 必须为 text。",
+              "若 needsReformat 为 true，或缩进/换行明显被剪藏挤坏（如 `cmd \\  --flag` 同行粘连）：",
+              "返回 reformat-code，并给出修复后的 content（不含围栏、保留原意与逻辑、只修格式与缩进）。",
+              "仅需改语言、正文完好：返回 set-code-language。",
+              "无需修改：返回 keep。",
               "要求输出严格 JSON。"
             ].join("\n")
           },
@@ -314,9 +321,19 @@ export class AiService {
             role: "user",
             content: JSON.stringify({
               title,
-              candidates: batch.map(({ id, content }) => ({ id, content })),
+              candidates: batch.map(({ id, content, fenceLanguage, needsReformat }) => ({
+                id,
+                content,
+                fenceLanguage: fenceLanguage || "",
+                needsReformat: Boolean(needsReformat)
+              })),
               requiredJsonShape: {
-                decisions: [{ id: "候选 id", action: "keep | set-code-language", language: "编程语言标识" }]
+                decisions: [{
+                  id: "候选 id",
+                  action: "keep | set-code-language | reformat-code",
+                  language: "语言标识；不确认时 text 或 markdown",
+                  content: "仅 reformat-code：修复后的代码正文，不含围栏"
+                }]
               }
             })
           }
@@ -750,24 +767,41 @@ function normalizeFormattingDecisions(
   value: FormattingResponse,
   candidates: FormattingCandidate[]
 ): FormattingDecision[] {
-  const candidateTypes = new Map(candidates.map((candidate) => [candidate.id, candidate.type]));
+  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
   const decisions = Array.isArray(value.decisions) ? value.decisions : [];
   return decisions.flatMap((decision): FormattingDecision[] => {
-    const type = candidateTypes.get(decision.id);
-    if (!type || typeof decision.action !== "string") return [];
+    const candidate = byId.get(decision.id);
+    if (!candidate || typeof decision.action !== "string") return [];
     if (decision.action === "keep") return [{ id: decision.id, action: "keep" }];
-    if (type === "possible-heading" && decision.action === "heading") {
+    if (candidate.type === "possible-heading" && decision.action === "heading") {
       const level = decision.level === 3 || decision.level === 4 ? decision.level : 2;
       return [{ id: decision.id, action: "heading", level }];
     }
-    if (type === "possible-code" && decision.action === "wrap-code") {
-      return [{ id: decision.id, action: "wrap-code", language: normalizeLanguageName(decision.language) }];
+    if (candidate.type === "possible-code" && decision.action === "wrap-code") {
+      const language = resolveDecisionLanguage(decision.language, candidate.content);
+      return [{ id: decision.id, action: "wrap-code", language }];
     }
-    if (type === "fenced-code" && decision.action === "set-code-language") {
-      return [{ id: decision.id, action: "set-code-language", language: normalizeLanguageName(decision.language) }];
+    if (candidate.type === "fenced-code" && decision.action === "set-code-language") {
+      const language = resolveDecisionLanguage(decision.language, candidate.content);
+      return [{ id: decision.id, action: "set-code-language", language }];
+    }
+    if (candidate.type === "fenced-code" && decision.action === "reformat-code") {
+      const content = typeof decision.content === "string"
+        ? decision.content.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "")
+        : "";
+      if (!content || /```/.test(content)) return [];
+      const language = resolveDecisionLanguage(decision.language, content);
+      return [{ id: decision.id, action: "reformat-code", language, content }];
     }
     return [];
   });
+}
+
+function resolveDecisionLanguage(value: unknown, body: string): string {
+  if (preferTextLanguage(body)) return "text";
+  const language = normalizeLanguageName(value);
+  // Uncertain / empty → text (never leave blank for the model to re-guess next run)
+  return language || "text";
 }
 
 function normalizeTranslationResponse(

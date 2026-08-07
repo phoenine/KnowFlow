@@ -18,7 +18,12 @@ const {
   batchFormattingCandidates,
   collectFormattingCandidates,
   collectHeadingCandidates,
-  stripSequentialLineNumbers
+  collectCodeCandidates,
+  hasSameNonWhitespaceContent,
+  needsCodeReformat,
+  preferTextLanguage,
+  stripSequentialLineNumbers,
+  trimCodeFenceBody
 } = await import(pathToFileURL(join(tempDir, "formatting-candidates.js")).href);
 
 {
@@ -122,6 +127,117 @@ assert.equal(
   "2024\n2025\n2026",
   "non-sequential numeric content must be preserved"
 );
+
+assert.equal(
+  preferTextLanguage("观测 → 轨迹 → 挖掘 → 经验 → 召回 → 运行 → 再观测"),
+  true,
+  "arrow-chain prose must prefer text language"
+);
+assert.equal(
+  preferTextLanguage("const value = 1;\nexport function run() {}"),
+  false,
+  "real code must not prefer text language"
+);
+assert.equal(
+  preferTextLanguage("# 中文标题\n正文内容"),
+  false,
+  "Chinese Markdown must remain eligible for language classification"
+);
+assert.equal(
+  preferTextLanguage("标题: 中文\n描述: 内容"),
+  false,
+  "Chinese YAML must remain eligible for language classification"
+);
+assert.equal(
+  hasSameNonWhitespaceContent("const value=1;", "const value = 1;"),
+  true,
+  "whitespace-only formatting must be accepted"
+);
+assert.equal(
+  hasSameNonWhitespaceContent("const value=1;", "const value = 2;"),
+  false,
+  "token changes must be rejected"
+);
+assert.equal(
+  needsCodeReformat('node scripts/search.js search \\  --query "foo" \\  --confirm'),
+  true,
+  "mashed backslash continuations need AI reformat"
+);
+assert.equal(
+  needsCodeReformat("const ok = 1;\nconst also = 2;"),
+  false,
+  "normal indented code should not need reformat"
+);
+assert.equal(
+  trimCodeFenceBody("\n    line1\n    line2\n"),
+  "    line1\n    line2",
+  "trim must preserve relative indentation"
+);
+
+{
+  const article = [
+    "流程如下：",
+    "",
+    "```js",
+    "观测 → 轨迹 → 挖掘 → 经验 → 召回 → 运行 → 再观测",
+    "```",
+    "",
+    "命令：",
+    "",
+    "```shell",
+    'node .skills/demo/scripts/search.js search \\  --query "排查超时" \\  --confirm-outbound',
+    "```"
+  ].join("\n");
+  const { fencedCode } = collectCodeCandidates(article);
+  assert.equal(
+    fencedCode.some((candidate) => candidate.content.includes("观测 →")),
+    false,
+    "plain-text fence must skip LLM language classification"
+  );
+  const mangled = fencedCode.find((candidate) => candidate.needsReformat);
+  assert.ok(mangled, "mashed shell fence must be collected for AI reformat");
+  assert.equal(mangled.fenceLanguage, "shell");
+
+  const reformatted = applyFormattingDecisions(article, fencedCode, [{
+    id: mangled.id,
+    action: "reformat-code",
+    language: "shell",
+    content: [
+      "node .skills/demo/scripts/search.js search \\",
+      '  --query "排查超时" \\',
+      "  --confirm-outbound"
+    ].join("\n")
+  }]);
+  assert.ok(reformatted.includes("```shell\nnode .skills/demo/scripts/search.js search \\\n  --query \"排查超时\" \\\n  --confirm-outbound\n```"));
+
+  const changedLogic = applyFormattingDecisions(article, fencedCode, [{
+    id: mangled.id,
+    action: "reformat-code",
+    language: "shell",
+    content: [
+      "node .skills/demo/scripts/search.js search \\",
+      '  --query "其他内容" \\',
+      "  --confirm-outbound"
+    ].join("\n")
+  }]);
+  assert.equal(changedLogic, article, "AI output that changes code content must be rejected");
+}
+
+{
+  const article = [
+    "```text",
+    "# 中文标题",
+    "正文内容",
+    "```",
+    "",
+    "```text",
+    "标题: 中文",
+    "描述: 内容",
+    "```"
+  ].join("\n");
+  const { fencedCode } = collectCodeCandidates(article);
+  assert.equal(fencedCode.length, 2, "Chinese Markdown and YAML must be sent for AI classification");
+}
 
 {
   const longArticle = Array.from({ length: 80 }, (_, index) => [

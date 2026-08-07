@@ -13,13 +13,19 @@ export interface FormattingCandidate {
   after: string;
   /** For HIGH-confidence code: the language to auto-apply, skipping LLM */
   autoLanguage?: string;
+  /** Existing fence language when collecting a mangled fenced block. */
+  fenceLanguage?: string;
+  /** Body looks mangled (broken indent / mashed line breaks) and needs AI reformat. */
+  needsReformat?: boolean;
 }
 
 export interface FormattingDecision {
   id: string;
-  action: "keep" | "heading" | "wrap-code" | "set-code-language";
+  action: "keep" | "heading" | "wrap-code" | "set-code-language" | "reformat-code";
   level?: number;
   language?: string;
+  /** Reformatted fence body (no opening/closing fences). */
+  content?: string;
 }
 
 import { assessUnfencedCode } from "./code-confidence";
@@ -46,16 +52,16 @@ export function collectFormattingCandidates(content: string): FormattingCandidat
     }
 
     for (let line = fenceStart; line <= index; line += 1) occupied.add(line);
-    if (!fenceLanguage || fenceLanguage === "text" || fenceLanguage === "plain") {
-      candidates.push(makeCandidate(
-        candidates.length,
-        "fenced-code",
-        fenceStart,
-        index,
-        lines.slice(fenceStart + 1, index).join("\n"),
-        lines
-      ));
-    }
+    const body = lines.slice(fenceStart + 1, index).join("\n");
+    const candidate = makeFencedCodeCandidate(
+      candidates.length,
+      fenceStart,
+      index,
+      body,
+      fenceLanguage,
+      lines
+    );
+    if (candidate) candidates.push(candidate);
     inFence = false;
     fenceStart = -1;
     fenceLanguage = "";
@@ -150,18 +156,36 @@ export function applyFormattingDecisions(
 
     const current = lines.slice(candidate.startLine, candidate.endLine + 1).join("\n");
     if (candidate.type === "fenced-code") {
-      if (decision.action !== "set-code-language") continue;
-      const language = normalizeLanguage(decision.language);
-      if (!language || current !== `\`\`\`${lines[candidate.startLine].replace(/^\s*```/, "").trim()}\n${candidate.content}\n\`\`\``) {
+      const fenceLang = lines[candidate.startLine].replace(/^\s*```/, "").trim();
+      const expected = `\`\`\`${fenceLang}\n${candidate.content}\n\`\`\``;
+      if (current !== expected) continue;
+
+      if (decision.action === "reformat-code") {
+        const language = resolveFenceLanguage(decision.language, candidate);
+        const body = typeof decision.content === "string" ? trimCodeFenceBody(decision.content) : "";
+        if (!language || !body || /```/.test(body) || !hasSameNonWhitespaceContent(candidate.content, body)) {
+          continue;
+        }
+        lines.splice(
+          candidate.startLine,
+          candidate.endLine - candidate.startLine + 1,
+          `\`\`\`${language}`,
+          ...body.split("\n"),
+          "```"
+        );
         continue;
       }
+
+      if (decision.action !== "set-code-language") continue;
+      const language = resolveFenceLanguage(decision.language, candidate);
+      if (!language) continue;
       lines[candidate.startLine] = `\`\`\`${language}`;
       continue;
     }
 
     if (current !== candidate.content) continue;
     if (candidate.type === "possible-code" && decision.action === "wrap-code") {
-      const language = normalizeLanguage(decision.language);
+      const language = normalizeLanguage(decision.language) || "text";
       lines.splice(candidate.startLine, candidate.endLine - candidate.startLine + 1, `\`\`\`${language}`, current, "```");
       continue;
     }
@@ -299,6 +323,97 @@ function normalizeLanguage(value: string | undefined): string {
   return /^[a-z0-9_+-]{1,24}$/.test(language) ? language : "";
 }
 
+function resolveFenceLanguage(value: string | undefined, candidate: FormattingCandidate): string {
+  if (preferTextLanguage(candidate.content)) return "text";
+  return normalizeLanguage(value) || normalizeLanguage(candidate.fenceLanguage) || "text";
+}
+
+/**
+ * AI code formatting may only change whitespace. Any changed command,
+ * identifier, literal or punctuation means the result is unsafe to apply.
+ */
+export function hasSameNonWhitespaceContent(source: string, formatted: string): boolean {
+  return source.replace(/\s/g, "") === formatted.replace(/\s/g, "");
+}
+
+/**
+ * Remove leading/trailing blank lines only — preserve relative indentation.
+ * `String.trim()` would strip the first line's indent and break alignment.
+ */
+export function trimCodeFenceBody(body: string): string {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  while (lines.length > 0 && !lines[0].trim()) lines.shift();
+  while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
+  return lines.join("\n");
+}
+
+/**
+ * True when the fence body is clearly not a programming language sample
+ * (flow diagrams, Chinese prose, arrow chains). Prefer `text` over guessing.
+ */
+export function preferTextLanguage(body: string): boolean {
+  const sample = body.trim();
+  if (!sample) return true;
+  const markdownStructure = /^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|!\[|\[[^\]]+\]\([^)]+\))/m.test(sample);
+  const yamlLines = sample
+    .split("\n")
+    .filter((line) => /^\s*[^:#\n][^:\n]*:\s*\S.*$/.test(line)).length;
+  if (markdownStructure || yamlLines >= 2) return false;
+  const hasCodeSignal = /[{};=]|=>|::|<\/?\w|^\s*(def|class|import|from|const|let|var|function|export|SELECT|INSERT|UPDATE|DELETE|curl|sudo|docker|kubectl|npm|git)\b/im.test(sample)
+    || /^\s*[{[]/.test(sample)
+    || /^(apiVersion|kind|metadata):/m.test(sample);
+  if (hasCodeSignal) return false;
+  if (/[→←↑↓⟷]/.test(sample)) return true;
+  const compact = sample.replace(/\s/g, "");
+  if (!compact) return true;
+  const cjk = (compact.match(/[\u3400-\u9fff]/g) || []).length;
+  return cjk >= 4 && cjk / compact.length > 0.5;
+}
+
+/**
+ * Detect clipper-mangled fence bodies that mechanical rules cannot reliably re-indent.
+ */
+export function needsCodeReformat(body: string): boolean {
+  const lines = body.split("\n").filter((line) => line.trim());
+  if (lines.length === 0) return false;
+  // Backslash continuation mashed onto the same line: `cmd \  --flag`
+  if (/\\\s{2,}\S/.test(body)) return true;
+  // One/two very long lines that look like collapsed multi-line code
+  if (lines.length <= 2) {
+    const long = lines.find((line) => line.length > 160);
+    if (long && /[;{}]|&&|\|\||\\|--[\w-]/.test(long)) return true;
+  }
+  // Substantial single-line JSON/YAML object
+  if (lines.length === 1 && lines[0].length > 100 && /^\s*[{[]/.test(lines[0])) return true;
+  return false;
+}
+
+function isUnsetFenceLanguage(language: string): boolean {
+  return !language || language === "text" || language === "plain";
+}
+
+function makeFencedCodeCandidate(
+  index: number,
+  startLine: number,
+  endLine: number,
+  body: string,
+  fenceLanguage: string,
+  lines: string[]
+): FormattingCandidate | null {
+  const plainLooking = preferTextLanguage(body);
+  const needsFmt = needsCodeReformat(body);
+  // Clear non-code prose: leave to mechanical `text` normalization, skip LLM.
+  if (plainLooking && !needsFmt) return null;
+
+  const needsLang = isUnsetFenceLanguage(fenceLanguage);
+  if (!needsLang && !needsFmt) return null;
+
+  const candidate = makeCandidate(index, "fenced-code", startLine, endLine, body, lines);
+  if (fenceLanguage) candidate.fenceLanguage = fenceLanguage;
+  if (needsFmt) candidate.needsReformat = true;
+  return candidate;
+}
+
 /**
  * Strip bold markers and trim. Returns empty string if the result is
  * a pure number or empty — these should not be sent to the LLM.
@@ -365,16 +480,16 @@ export function collectCodeCandidates(content: string): {
       continue;
     }
     for (let j = fenceStart; j <= i; j += 1) occupied.add(j);
-    if (!fenceLanguage || fenceLanguage === "text" || fenceLanguage === "plain") {
-      fencedCode.push(makeCandidate(
-        fencedCode.length,
-        "fenced-code",
-        fenceStart,
-        i,
-        lines.slice(fenceStart + 1, i).join("\n"),
-        lines
-      ));
-    }
+    const body = lines.slice(fenceStart + 1, i).join("\n");
+    const candidate = makeFencedCodeCandidate(
+      fencedCode.length,
+      fenceStart,
+      i,
+      body,
+      fenceLanguage,
+      lines
+    );
+    if (candidate) fencedCode.push(candidate);
     inFence = false;
     fenceStart = -1;
     fenceLanguage = "";

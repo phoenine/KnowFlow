@@ -9,8 +9,9 @@ import {
   collectCodeCandidates,
   collectHeadingCandidates,
   normalizeOrphanBoldTriplet,
+  preferTextLanguage,
   stripSequentialLineNumbers,
-  type FormattingCandidate
+  trimCodeFenceBody
 } from "./formatting-candidates";
 import { applyArticleFrontmatter, updateFrontmatterCategory } from "./frontmatter-rules";
 import { loadUserSkillFile, loadSkill } from "./repair-skill";
@@ -77,46 +78,43 @@ export class ClippingPipeline {
       const userSkill = await loadUserSkillFile(this.app.vault.adapter);
       this.ai.setSkill(loadSkill(userSkill ?? undefined));
 
-      // Phase 2: 代码格式化（规则，先跑，把代码块结构定下来）
-      await report("格式化代码块");
+      // Phase 2: 先识别未围栏代码，统一包成 fenced code block
+      const unfencedResult = collectCodeCandidates(formatted);
+      const highConfidence = unfencedResult.possibleCode.filter((candidate) => candidate.autoLanguage);
+      const mediumConfidence = unfencedResult.possibleCode.filter((candidate) => !candidate.autoLanguage);
+      const hasMediumCode = mediumConfidence.length > 0;
+      if (!hasMediumCode) await report("AI 判断未围栏代码", "skipped");
+      const mediumDecisions = hasMediumCode
+        ? await this.ai.analyzePossibleCodeCandidates(title, mediumConfidence)
+        : [];
+      const autoDecisions = highConfidence.map((candidate) => ({
+        id: candidate.id,
+        action: "wrap-code" as const,
+        language: candidate.autoLanguage
+      }));
+      formatted = applyFormattingDecisions(
+        formatted,
+        unfencedResult.possibleCode,
+        [...autoDecisions, ...mediumDecisions]
+      );
+      if (hasMediumCode) await report("AI 判断未围栏代码", "completed");
+
+      // Phase 3: 所有代码都已有围栏后，再统一执行确定性清理
+      await report("预检代码块");
       formatted = this.formatCodeBlocks(formatted);
 
-      // Phase 3: 代码收集（置信度分级）→ HIGH 自动包围栏 / MEDIUM 送 LLM
-      const codeResult = collectCodeCandidates(formatted);
-      const highConfidence = codeResult.possibleCode.filter((c) => c.autoLanguage);
-      const mediumConfidence = codeResult.possibleCode.filter((c) => !c.autoLanguage);
-      const hasMediumCode = mediumConfidence.length > 0;
-      const hasFencedCode = codeResult.fencedCode.length > 0;
-
-      // HIGH: 直接包围栏，不走 LLM
-      if (highConfidence.length > 0) {
-        formatted = this.applyAutoCodeWraps(formatted, highConfidence);
+      // Phase 4: 对清理后的围栏代码判断语言，并按需由 AI 修复缩进/换行
+      const fencedCode = collectCodeCandidates(formatted).fencedCode;
+      if (fencedCode.length === 0) {
+        await report("AI 格式化代码块", "skipped");
+      } else {
+        await report("AI 格式化代码块");
+        const fencedDecisions = await this.ai.analyzeFencedCodeCandidates(title, fencedCode);
+        formatted = applyFormattingDecisions(formatted, fencedCode, fencedDecisions);
+        await report("AI 格式化代码块", "completed");
       }
 
-      if (!hasMediumCode) await report("AI 判断未围栏代码", "skipped");
-      if (!hasFencedCode) await report("AI 判断代码语言", "skipped");
-
-      if (hasMediumCode || hasFencedCode) {
-        await report(hasMediumCode ? "AI 判断未围栏代码" : "AI 判断代码语言");
-        const [codeDecisions, fencedDecisions] = await Promise.all([
-          hasMediumCode
-            ? this.ai.analyzePossibleCodeCandidates(title, mediumConfidence)
-            : Promise.resolve([]),
-          hasFencedCode
-            ? this.ai.analyzeFencedCodeCandidates(title, codeResult.fencedCode)
-            : Promise.resolve([])
-        ]);
-        if (hasMediumCode) {
-          formatted = applyFormattingDecisions(formatted, mediumConfidence, codeDecisions);
-        }
-        if (hasFencedCode) {
-          formatted = applyFormattingDecisions(formatted, codeResult.fencedCode, fencedDecisions);
-        }
-        if (hasMediumCode) await report("AI 判断未围栏代码", "completed");
-        if (hasFencedCode) await report("AI 判断代码语言", "completed");
-      }
-
-      // Phase 4: 标题 LLM（放在代码整理之后，候选质量更高）
+      // Phase 5: 标题 LLM（放在代码整理之后，候选质量更高）
       const headingCandidates = collectHeadingCandidates(formatted);
       if (headingCandidates.length > 0) {
         await report("AI 判断标题");
@@ -247,29 +245,14 @@ export class ClippingPipeline {
 
   private formatCodeBlocks(content: string): string {
     return removeCodeWatermarkLines(content).replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_match, rawLang: string, rawBody: string) => {
-      const body = stripSequentialLineNumbers(rawBody
+      const body = trimCodeFenceBody(stripSequentialLineNumbers(rawBody
         .replace(/^\s*(体验AI代码助手|代码解读复制代码)\s*$/gm, "")
         .replace(/体验AI代码助手\s*代码解读复制代码/g, "")
         .replace(/^\s*(In \[\d+\]:|Out\[\d+\]:)\s*$/gm, "")
-        .replace(/[ \t]+$/gm, ""));
+        .replace(/[ \t]+$/gm, "")));
       const lang = normalizeCodeLanguage(rawLang, body);
-      return `\`\`\`${lang}\n${body.trim()}\n\`\`\``;
+      return `\`\`\`${lang}\n${body}\n\`\`\``;
     });
-  }
-
-  /** Auto-wrap HIGH-confidence code candidates with their detected language fence. */
-  private applyAutoCodeWraps(content: string, candidates: FormattingCandidate[]): string {
-    const lines = content.split("\n");
-    // Process bottom-up
-    const sorted = [...candidates].sort((a, b) => b.startLine - a.startLine);
-    for (const candidate of sorted) {
-      if (!candidate.autoLanguage) continue;
-      const current = lines.slice(candidate.startLine, candidate.endLine + 1).join("\n");
-      if (current !== candidate.content) continue;
-      lines.splice(candidate.startLine, candidate.endLine - candidate.startLine + 1,
-        `\`\`\`${candidate.autoLanguage}`, current, "```");
-    }
-    return lines.join("\n");
   }
 
   /**
@@ -354,6 +337,9 @@ function stripOrphanBoldDelimiters(content: string): string {
 }
 
 function normalizeCodeLanguage(rawLang: string, body: string): string {
+  // Flow diagrams / Chinese prose: never keep a guessed programming language.
+  if (preferTextLanguage(body)) return "text";
+
   const raw = rawLang.trim();
   const lang = /^(体验AI代码助手|代码解读|复制代码)/.test(raw)
     ? ""
@@ -367,7 +353,8 @@ function normalizeCodeLanguage(rawLang: string, body: string): string {
   if (/^(curl|sudo|git|npm|pnpm|yarn|docker|kubectl|cd|mkdir|chmod)\b/m.test(sample)) return "bash";
   if (/^(select|with|insert|update|delete|create table)\b/im.test(sample)) return "sql";
   if (/^<[\w!?]/.test(sample)) return "html";
-  return lang || "";
+  // Uncertain → text (not empty, not a guessed programming language)
+  return "text";
 }
 
 const CHINESE_DIGITS: Record<string, number> = {
